@@ -1,0 +1,7 @@
+name	pk	type
+cmp_cd	Y
+site_cd	Y
+recv_dt	N	DATE
+item_cd	N
+item_nm	N
+qty	N
