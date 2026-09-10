@@ -1,0 +1,841 @@
+<title>지표 체크보드</title>
+<meta name="description" content="원하는 지표를 직접 정의해서 매일 기록하고, 추이와 예측을 자동으로 보여주는 범용 운영 대시보드 — 어떤 팀이든 사용 가능">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+:root{
+  --ground:#F5F5F8; --surface:#FFFFFF; --surface-2:#ECECF3;
+  --ink:#1C1B22; --ink-soft:#4E4C5C; --muted:#8B889A; --border:#DFDEE8;
+  --accent:#5B4FE8; --accent-soft:#E8E5FC; --accent-strong:#4238C2;
+  --good:#2F9E58; --good-bg:#E4F5EA;
+  --warn:#B9791F; --warn-bg:#FBEED9;
+  --crit:#C6423F; --crit-bg:#FBE4E3;
+  --s1:#5B4FE8; --s2:#2E9E8F; --s3:#C9722E; --s4:#3B7DC4; --s5:#9A5CB0; --s6:#3F9142; --s7:#B0562F; --s8:#5D6BC7;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#131218; --surface:#1B1A22; --surface-2:#232230;
+    --ink:#ECEAF5; --ink-soft:#B4B1C4; --muted:#726F84; --border:#302E3D;
+    --accent:#8B7FFF; --accent-soft:#2A2650; --accent-strong:#B1A6FF;
+    --good:#57C97F; --good-bg:#173327;
+    --warn:#E0A947; --warn-bg:#332711;
+    --crit:#E5726E; --crit-bg:#3A1E1D;
+    --s1:#8B7FFF; --s2:#4DC2AE; --s3:#E0965A; --s4:#6FA6DE; --s5:#C186D6; --s6:#6FCB74; --s7:#D98E68; --s8:#8C97E0;
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#131218; --surface:#1B1A22; --surface-2:#232230;
+  --ink:#ECEAF5; --ink-soft:#B4B1C4; --muted:#726F84; --border:#302E3D;
+  --accent:#8B7FFF; --accent-soft:#2A2650; --accent-strong:#B1A6FF;
+  --good:#57C97F; --good-bg:#173327;
+  --warn:#E0A947; --warn-bg:#332711;
+  --crit:#E5726E; --crit-bg:#3A1E1D;
+  --s1:#8B7FFF; --s2:#4DC2AE; --s3:#E0965A; --s4:#6FA6DE; --s5:#C186D6; --s6:#6FCB74; --s7:#D98E68; --s8:#8C97E0;
+}
+*{box-sizing:border-box;}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:"IBM Plex Sans KR","Apple SD Gothic Neo",sans-serif;padding:28px 20px 60px;}
+.wrap{max-width:980px;margin:0 auto;}
+.mono{font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums;}
+.eyebrow{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 6px;}
+h1{font-size:24px;margin:0 0 6px;font-weight:700;}
+.desc{color:var(--ink-soft);font-size:14px;margin:0 0 4px;line-height:1.6;max-width:64ch;}
+.status-line{font-size:12.5px;color:var(--muted);margin:0 0 18px;}
+.status-line.err{color:var(--crit);}
+
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px;margin-bottom:14px;}
+.card h2{font-size:14px;margin:0 0 4px;font-weight:600;}
+.card .sub{font-size:12.5px;color:var(--muted);margin:0 0 14px;}
+
+label{display:block;font-size:12px;color:var(--ink-soft);margin-bottom:5px;font-weight:500;}
+input[type=text], input[type=number], input[type=date], select{
+  width:100%;background:var(--surface-2);border:1px solid var(--border);border-radius:7px;
+  padding:8px 10px;color:var(--ink);font-size:13.5px;font-family:"IBM Plex Mono",monospace;
+}
+select{font-family:"IBM Plex Sans KR",sans-serif;}
+input:focus, select:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent);}
+
+.templates{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;}
+.templates button{font:inherit;font-size:13px;background:var(--surface);color:var(--ink-soft);
+  border:1px solid var(--border);border-radius:999px;padding:8px 16px;cursor:pointer;}
+.templates button:hover{border-color:var(--accent);color:var(--ink);}
+
+.form-row{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px;align-items:flex-end;}
+.form-row .field{flex:1;min-width:140px;}
+.ghost-btn{font:inherit;font-size:12px;background:transparent;border:1px solid var(--border);
+  border-radius:7px;padding:6px 11px;cursor:pointer;color:var(--ink-soft);}
+.ghost-btn:hover{color:var(--accent);border-color:var(--accent);}
+.add-btn{font:inherit;font-size:12.5px;background:transparent;border:1px dashed var(--border);
+  border-radius:7px;padding:7px 12px;cursor:pointer;color:var(--ink-soft);}
+.add-btn:hover{color:var(--accent);border-color:var(--accent);}
+
+.cat-list{display:flex;flex-direction:column;gap:8px;margin-bottom:6px;}
+.cat-row{display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface-2);
+  border:1px solid var(--border);border-radius:8px;font-size:13px;}
+.cat-row .name{font-weight:600;flex:1;}
+.cat-row .type-badge{font-size:11px;padding:2px 8px;border-radius:999px;background:var(--accent-soft);color:var(--accent-strong);}
+.cat-row .meta{font-size:12px;color:var(--muted);}
+.icon-btn{font:inherit;font-size:13px;background:var(--surface);border:1px solid var(--border);
+  border-radius:6px;padding:6px 9px;cursor:pointer;color:var(--ink-soft);flex:none;}
+.icon-btn:hover{color:var(--crit);border-color:var(--crit);}
+.icon-btn.armed{background:var(--crit);color:#fff;border-color:var(--crit);}
+.templates button.armed{background:var(--crit);border-color:var(--crit);color:#fff;}
+.danger-btn.armed{background:var(--crit);color:#fff;}
+.inline-msg{font-size:12.5px;margin:8px 0 0;min-height:1em;}
+.inline-msg.error{color:var(--crit);}
+
+.rowlist{display:flex;flex-direction:column;gap:8px;margin-bottom:10px;}
+.rowlist .item{display:flex;gap:8px;align-items:center;}
+.rowlist .item input{flex:1;}
+.rowlist .item input.small{max-width:100px;flex:none;}
+.rowlist .item .computed{width:130px;flex:none;font-size:12px;color:var(--ink-soft);font-family:"IBM Plex Mono",monospace;text-align:right;padding-right:4px;}
+.col-hint{display:flex;gap:8px;font-size:11px;color:var(--muted);margin-bottom:4px;}
+.col-hint span{flex:1;} .col-hint span.small{max-width:100px;flex:none;text-align:center;}
+.col-hint span.computed{width:130px;flex:none;text-align:right;padding-right:4px;}
+.col-hint span.spacer{width:31px;flex:none;}
+
+.entry-block{margin-bottom:20px;padding-bottom:18px;border-bottom:1px solid var(--border);}
+.entry-block:last-of-type{border-bottom:none;padding-bottom:0;margin-bottom:10px;}
+.entry-block h3{font-size:13.5px;margin:0 0 10px;font-weight:600;}
+
+.actions{display:flex;align-items:center;gap:10px;margin-top:4px;flex-wrap:wrap;}
+.save-btn{font:inherit;font-size:14px;font-weight:600;background:var(--accent);color:#fff;
+  border:none;border-radius:8px;padding:10px 20px;cursor:pointer;}
+.save-btn:hover{background:var(--accent-strong);}
+.save-btn:disabled{opacity:.5;cursor:default;}
+.danger-btn{font:inherit;font-size:13px;background:transparent;color:var(--crit);
+  border:1px solid var(--crit);border-radius:8px;padding:9px 14px;cursor:pointer;}
+.danger-btn:hover{background:var(--crit-bg);}
+.saved-note{font-size:12.5px;color:var(--good);}
+.editing-note{font-size:12.5px;color:var(--warn);margin:0 0 14px;}
+
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;}
+.tile{background:var(--surface-2);border:1px solid var(--border);border-radius:9px;padding:14px 16px;}
+.tile.warn{background:var(--warn-bg);} .tile.crit{background:var(--crit-bg);}
+.tile .label{font-size:12px;color:var(--ink-soft);margin:0 0 6px;}
+.tile .value{font-size:19px;font-weight:600;margin:0;}
+.tile.warn .value{color:var(--warn);} .tile.crit .value{color:var(--crit);}
+.tile .sub2{font-size:11.5px;color:var(--muted);margin-top:4px;}
+
+.chart-wrap{position:relative;}
+svg{display:block;width:100%;height:auto;overflow:visible;}
+.gridline{stroke:var(--border);stroke-width:1;}
+.axis-label{fill:var(--muted);font-size:10.5px;font-family:"IBM Plex Mono",monospace;}
+.legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;}
+.legend .item{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-soft);}
+.legend .dot{width:9px;height:9px;border-radius:50%;flex:none;}
+.overflow-note{font-size:11.5px;color:var(--muted);margin-top:6px;}
+.empty-note{font-size:13px;color:var(--muted);padding:20px 0;text-align:center;}
+.empty-state{font-size:13.5px;color:var(--ink-soft);padding:24px;text-align:center;background:var(--surface-2);border-radius:9px;border:1px dashed var(--border);}
+
+.backup-strip{display:flex;gap:4px;flex-wrap:wrap;}
+.backup-day{width:16px;height:16px;border-radius:4px;}
+.backup-day.ok{background:var(--good);}
+.backup-day.fail{background:var(--crit);}
+
+table{width:100%;border-collapse:collapse;font-size:13px;}
+th{text-align:left;font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em;
+  padding:0 10px 8px;border-bottom:1px solid var(--border);}
+td{padding:9px 10px;border-bottom:1px solid var(--border);}
+tr:last-child td{border-bottom:none;}
+td.num{font-family:"IBM Plex Mono",monospace;text-align:right;}
+th.num{text-align:right;}
+.table-wrap{overflow-x:auto;}
+
+footer{margin-top:16px;font-size:12px;color:var(--muted);line-height:1.6;}
+</style>
+
+<div class="wrap">
+  <p class="eyebrow">누구나 쓰는 운영 도구</p>
+  <h1>지표 체크보드</h1>
+  <p class="desc">원하는 지표를 직접 정의하고 매일 기록하면, 추이·경고·예측을 자동으로 보여줍니다. DBA든 인사팀이든 재무팀이든, 지표만 바꾸면 그대로 씁니다.</p>
+  <p class="status-line" id="dbStatus">연결 확인 중…</p>
+
+  <div class="card" id="setupCard">
+    <h2>지표 설정</h2>
+    <p class="sub">비율형(두 숫자로 비율 자동계산) · 숫자형(값 추이+예측) · 상태형(성공/실패 등) 중 골라 지표를 만드세요</p>
+
+    <div class="templates" id="templateBtns">
+      <button data-tpl="dba">템플릿: DBA 운영</button>
+      <button data-tpl="hr">템플릿: 인사 현황</button>
+      <button data-tpl="budget">템플릿: 예산 관리</button>
+    </div>
+
+    <div class="cat-list" id="catList"></div>
+
+    <p class="editing-note" id="catEditingNote" hidden>기존 지표를 수정 중입니다 — 저장하면 지금까지 기록된 값은 그대로 유지됩니다 <button type="button" class="ghost-btn" id="cancelCatEdit" style="margin-left:8px;">취소</button></p>
+    <div class="form-row">
+      <div class="field">
+        <label for="newCatName">지표 이름</label>
+        <input type="text" id="newCatName" placeholder="예: 테이블스페이스">
+      </div>
+      <div class="field">
+        <label for="newCatType">유형</label>
+        <select id="newCatType">
+          <option value="ratio">비율형 (두 숫자 비교)</option>
+          <option value="value">숫자형 (값 추이)</option>
+          <option value="status">상태형 (성공/실패 등)</option>
+        </select>
+      </div>
+      <div class="field" id="ratioOpts">
+        <label>첫 번째 값 이름 / 두 번째 값 이름</label>
+        <div style="display:flex;gap:8px;">
+          <input type="text" id="newCatTotalLabel" placeholder="예: 목표" value="TOTAL">
+          <input type="text" id="newCatUsedLabel" placeholder="예: 달성" value="USED">
+        </div>
+      </div>
+      <div class="field" id="ratioThresh">
+        <label>경고 / 위험 기준(%)</label>
+        <div style="display:flex;gap:8px;">
+          <input type="number" id="newCatWarn" placeholder="80" value="80">
+          <input type="number" id="newCatCrit" placeholder="90" value="90">
+        </div>
+      </div>
+      <div class="field" id="valueOpts" hidden>
+        <label>단위 (선택)</label>
+        <input type="text" id="newCatUnit" placeholder="예: GB, 명, 건">
+      </div>
+      <div class="field" id="statusOpts" hidden>
+        <label>상태 옵션 (쉼표 구분, 첫 번째가 정상)</label>
+        <input type="text" id="newCatStatusOpts" placeholder="성공,실패" value="성공,실패">
+      </div>
+    </div>
+    <button class="add-btn" id="addCatBtn">+ 지표 추가</button>
+    <p class="inline-msg" id="setupMsg"></p>
+  </div>
+
+  <div class="card" id="entryCard" hidden>
+    <h2>오늘 값 입력</h2>
+    <p class="sub">이미 기록된 날짜를 선택하면 그날 값을 불러옵니다</p>
+    <p class="editing-note" id="editingNote" hidden>이 날짜는 이미 기록이 있습니다 — 불러온 값을 수정 중입니다</p>
+    <div class="form-row">
+      <div class="field">
+        <label for="dateInput">날짜</label>
+        <input type="date" id="dateInput">
+      </div>
+      <div class="field">
+        <button type="button" class="ghost-btn" id="loadPrev" style="margin-top:18px;">직전 기록에서 이름 불러오기</button>
+      </div>
+    </div>
+    <div id="entryBlocks"></div>
+    <div class="actions">
+      <button class="save-btn" id="saveBtn">이 날짜로 저장</button>
+      <button class="danger-btn" id="deleteBtn">이 날짜 기록 삭제</button>
+      <span class="saved-note" id="savedNote" hidden>저장됨</span>
+    </div>
+    <p class="inline-msg" id="entryMsg"></p>
+  </div>
+
+  <div id="reportArea" hidden>
+    <div class="card">
+      <h2>현재 상태</h2>
+      <p class="sub" id="latestDateNote">아직 저장된 기록이 없습니다</p>
+      <div class="tiles" id="statusTiles"></div>
+    </div>
+    <div id="chartArea"></div>
+  </div>
+
+  <div class="empty-state" id="noCatState">
+    위에서 템플릿을 선택하거나 지표를 직접 추가하면 시작할 수 있습니다.
+  </div>
+
+  <footer>지표 정의와 매일 기록은 이 아티팩트 안에 계속 저장됩니다.</footer>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const SERIES_COLORS = ['var(--s1)','var(--s2)','var(--s3)','var(--s4)','var(--s5)','var(--s6)','var(--s7)','var(--s8)'];
+const MAX_SERIES = 8;
+
+let db = null;
+let config = { categories: [] };
+let snapshots = [];
+let firstLoad = true;
+
+function totalLabelOf(cat){ return cat.totalLabel || 'TOTAL'; }
+function usedLabelOf(cat){ return cat.usedLabel || 'USED'; }
+
+const TEMPLATES = {
+  dba: [
+    {name:'테이블스페이스', type:'ratio', totalLabel:'TOTAL', usedLabel:'USED', warn:80, crit:90},
+    {name:'테이블 용량', type:'value', unit:'GB'},
+    {name:'백업', type:'status', options:['성공','실패']}
+  ],
+  hr: [
+    {name:'부서별 재직 인원', type:'value', unit:'명'},
+    {name:'채용 목표 달성률', type:'ratio', totalLabel:'목표', usedLabel:'달성', warn:70, crit:90},
+    {name:'급여 지급', type:'status', options:['완료','지연']}
+  ],
+  budget: [
+    {name:'부서별 예산 집행', type:'ratio', totalLabel:'예산', usedLabel:'집행', warn:90, crit:100},
+    {name:'프로젝트별 지출', type:'value', unit:'만원'},
+    {name:'월마감 처리', type:'status', options:['완료','지연']}
+  ]
+};
+
+function uid(){ return 'c'+Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
+function todayStr(){
+  const d = new Date();
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+function daysBetween(a,b){ return (new Date(b+'T00:00:00') - new Date(a+'T00:00:00')) / 86400000; }
+
+// 아티팩트 샌드박스에서는 confirm()/alert()가 동작하지 않을 수 있어 직접 구현
+function showMsg(el, text, isError){
+  el.textContent = text;
+  el.classList.toggle('error', !!isError);
+  clearTimeout(el._t);
+  el._t = setTimeout(()=>{ el.textContent=''; }, 3500);
+}
+function armThenConfirm(btn, action, armedLabel){
+  if(btn.dataset.armed==='1'){
+    btn.dataset.armed='0';
+    btn.classList.remove('armed');
+    clearTimeout(btn._armTimer);
+    if(btn._origText!=null){ btn.textContent = btn._origText; btn._origText=null; }
+    action();
+    return;
+  }
+  btn.dataset.armed='1';
+  btn.classList.add('armed');
+  if(armedLabel){ btn._origText = btn.textContent; btn.textContent = armedLabel; }
+  btn.title = '다시 누르면 실행됩니다';
+  btn._armTimer = setTimeout(()=>{
+    btn.dataset.armed='0';
+    btn.classList.remove('armed');
+    btn.title = '';
+    if(btn._origText!=null){ btn.textContent = btn._origText; btn._origText=null; }
+  }, 3000);
+}
+
+// ================= 지표 설정 =================
+function renderCatList(){
+  const list = $('catList');
+  if(!config.categories.length){ list.innerHTML=''; return; }
+  list.innerHTML = config.categories.map(c=>{
+    const typeLabel = c.type==='ratio' ? '비율형' : c.type==='value' ? '숫자형' : '상태형';
+    const meta = c.type==='ratio' ? `${totalLabelOf(c)}/${usedLabelOf(c)} · 경고 ${c.warn}% · 위험 ${c.crit}%`
+      : c.type==='value' ? (c.unit ? `단위: ${c.unit}` : '')
+      : `옵션: ${(c.options||[]).join(' / ')}`;
+    return `<div class="cat-row">
+      <span class="type-badge">${typeLabel}</span>
+      <span class="name">${c.name}</span>
+      <span class="meta">${meta}</span>
+      <button class="icon-btn" data-edit="${c.id}" aria-label="수정">✎</button>
+      <button class="icon-btn" data-del="${c.id}" aria-label="삭제 (한 번 더 누르면 삭제됩니다)">✕</button>
+    </div>`;
+  }).join('');
+  list.querySelectorAll('[data-del]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      armThenConfirm(btn, ()=>{
+        config.categories = config.categories.filter(c=>c.id!==btn.dataset.del);
+        if(editingCatId===btn.dataset.del) cancelCatEdit();
+        saveConfig();
+        renderAll();
+      });
+    });
+  });
+  list.querySelectorAll('[data-edit]').forEach(btn=>{
+    btn.addEventListener('click', ()=>startCatEdit(btn.dataset.edit));
+  });
+}
+
+$('newCatType').addEventListener('change', ()=>{
+  const t = $('newCatType').value;
+  $('ratioOpts').hidden = t!=='ratio';
+  $('ratioThresh').hidden = t!=='ratio';
+  $('valueOpts').hidden = t!=='value';
+  $('statusOpts').hidden = t!=='status';
+});
+
+let editingCatId = null;
+
+function resetCatForm(){
+  $('newCatName').value = '';
+  $('newCatType').value = 'ratio';
+  $('newCatType').dispatchEvent(new Event('change'));
+  $('newCatTotalLabel').value = 'TOTAL';
+  $('newCatUsedLabel').value = 'USED';
+  $('newCatWarn').value = 80;
+  $('newCatCrit').value = 90;
+  $('newCatUnit').value = '';
+  $('newCatStatusOpts').value = '성공,실패';
+}
+
+function startCatEdit(id){
+  const cat = config.categories.find(c=>c.id===id);
+  if(!cat) return;
+  editingCatId = id;
+  $('catEditingNote').hidden = false;
+  $('addCatBtn').textContent = '지표 수정 저장';
+  $('newCatName').value = cat.name;
+  $('newCatType').value = cat.type;
+  $('newCatType').dispatchEvent(new Event('change'));
+  if(cat.type==='ratio'){
+    $('newCatTotalLabel').value = totalLabelOf(cat);
+    $('newCatUsedLabel').value = usedLabelOf(cat);
+    $('newCatWarn').value = cat.warn;
+    $('newCatCrit').value = cat.crit;
+  } else if(cat.type==='value'){
+    $('newCatUnit').value = cat.unit || '';
+  } else {
+    $('newCatStatusOpts').value = (cat.options||[]).join(',');
+  }
+  $('setupCard').scrollIntoView({behavior:'smooth', block:'nearest'});
+}
+
+function cancelCatEdit(){
+  editingCatId = null;
+  $('catEditingNote').hidden = true;
+  $('addCatBtn').textContent = '+ 지표 추가';
+  resetCatForm();
+}
+$('cancelCatEdit').addEventListener('click', cancelCatEdit);
+
+$('addCatBtn').addEventListener('click', ()=>{
+  const name = $('newCatName').value.trim();
+  if(!name){ showMsg($('setupMsg'), '지표 이름을 입력하세요.', true); return; }
+  const type = $('newCatType').value;
+  const cat = { id: editingCatId || uid(), name, type };
+  if(type==='ratio'){
+    cat.totalLabel = $('newCatTotalLabel').value.trim() || 'TOTAL';
+    cat.usedLabel = $('newCatUsedLabel').value.trim() || 'USED';
+    cat.warn = Number($('newCatWarn').value)||80;
+    cat.crit = Number($('newCatCrit').value)||90;
+  }
+  if(type==='value'){ cat.unit = $('newCatUnit').value.trim(); }
+  if(type==='status'){ cat.options = $('newCatStatusOpts').value.split(',').map(s=>s.trim()).filter(Boolean); if(cat.options.length<2) cat.options=['성공','실패']; }
+
+  if(editingCatId){
+    const idx = config.categories.findIndex(c=>c.id===editingCatId);
+    if(idx>=0) config.categories[idx] = cat;
+    cancelCatEdit();
+  } else {
+    config.categories.push(cat);
+    resetCatForm();
+  }
+  saveConfig();
+  renderAll();
+});
+
+$('templateBtns').addEventListener('click', e=>{
+  const btn = e.target.closest('button[data-tpl]');
+  if(!btn) return;
+  const tpl = TEMPLATES[btn.dataset.tpl];
+  const apply = ()=>{
+    config.categories = tpl.map(t=>({ id: uid(), ...t }));
+    saveConfig();
+    renderAll();
+  };
+  if(config.categories.length){
+    armThenConfirm(btn, apply, '다시 누르면 교체됩니다');
+  } else {
+    apply();
+  }
+});
+
+// ================= 오늘 값 입력 =================
+function makeRatioRow(container, cat, {name, totalV, usedV}={}){
+  const row = document.createElement('div');
+  row.className = 'item';
+  row.innerHTML = `
+    <input type="text" class="r-name" placeholder="이름" value="${name ?? ''}">
+    <input type="number" class="r-total small" placeholder="${totalLabelOf(cat)}" value="${totalV ?? ''}">
+    <input type="number" class="r-used small" placeholder="${usedLabelOf(cat)}" value="${usedV ?? ''}">
+    <span class="computed r-computed">—</span>
+    <button type="button" class="icon-btn" aria-label="삭제">✕</button>`;
+  const update = ()=>{
+    const total = Number(row.querySelector('.r-total').value);
+    const used = Number(row.querySelector('.r-used').value);
+    const out = row.querySelector('.r-computed');
+    out.textContent = total>0 ? `${(total-used).toFixed(1)} 여유 · ${(used/total*100).toFixed(1)}%` : '—';
+  };
+  row.querySelector('.r-total').addEventListener('input', update);
+  row.querySelector('.r-used').addEventListener('input', update);
+  row.querySelector('.icon-btn').addEventListener('click', ()=>row.remove());
+  container.appendChild(row);
+  update();
+}
+function readRatioRows(container){
+  return [...container.querySelectorAll('.item')].map(row=>({
+    name: row.querySelector('.r-name').value.trim(),
+    totalV: Number(row.querySelector('.r-total').value)||0,
+    usedV: Number(row.querySelector('.r-used').value)||0
+  })).filter(r=>r.name);
+}
+function makeValueRow(container, unit, {name, v}={}){
+  const row = document.createElement('div');
+  row.className = 'item';
+  row.innerHTML = `<input type="text" class="v-name" placeholder="이름" value="${name ?? ''}">
+    <input type="number" class="v-val small" placeholder="${unit || '값'}" value="${v ?? ''}">
+    <button type="button" class="icon-btn" aria-label="삭제">✕</button>`;
+  row.querySelector('.icon-btn').addEventListener('click', ()=>row.remove());
+  container.appendChild(row);
+}
+function readValueRows(container){
+  return [...container.querySelectorAll('.item')].map(row=>({
+    name: row.querySelector('.v-name').value.trim(),
+    v: Number(row.querySelector('.v-val').value)||0
+  })).filter(r=>r.name);
+}
+
+function buildEntryBlocks(){
+  const area = $('entryBlocks');
+  area.innerHTML = '';
+  config.categories.forEach(cat=>{
+    const block = document.createElement('div');
+    block.className = 'entry-block';
+    block.dataset.catId = cat.id;
+    if(cat.type==='ratio'){
+      block.innerHTML = `<h3>${cat.name}</h3>
+        <div class="col-hint"><span>이름</span><span class="small">${totalLabelOf(cat)}</span><span class="small">${usedLabelOf(cat)}</span><span class="computed">여유·비율</span><span class="spacer"></span></div>
+        <div class="rowlist" data-rowlist></div>
+        <button type="button" class="add-btn" data-add>+ 항목 추가</button>`;
+      block.querySelector('[data-add]').addEventListener('click', ()=>makeRatioRow(block.querySelector('[data-rowlist]'), cat));
+    } else if(cat.type==='value'){
+      block.innerHTML = `<h3>${cat.name}${cat.unit?` (${cat.unit})`:''}</h3>
+        <div class="rowlist" data-rowlist></div>
+        <button type="button" class="add-btn" data-add>+ 항목 추가</button>`;
+      block.querySelector('[data-add]').addEventListener('click', ()=>makeValueRow(block.querySelector('[data-rowlist]'), cat.unit));
+    } else {
+      block.innerHTML = `<h3>${cat.name}</h3>
+        <div class="form-row" style="margin-bottom:0;">
+          <div class="field">
+            <label>상태</label>
+            <select data-status>${cat.options.map(o=>`<option value="${o}">${o}</option>`).join('')}</select>
+          </div>
+          <div class="field">
+            <label>메모 (선택)</label>
+            <input type="text" data-note placeholder="메모">
+          </div>
+        </div>`;
+    }
+    area.appendChild(block);
+  });
+}
+
+function clearEntryRows(){
+  config.categories.forEach(cat=>{
+    if(cat.type==='status') return;
+    const block = document.querySelector(`.entry-block[data-cat-id="${cat.id}"] [data-rowlist]`);
+    if(block) block.innerHTML = '';
+  });
+}
+
+function applySnapshotToForm(snap){
+  clearEntryRows();
+  config.categories.forEach(cat=>{
+    const block = document.querySelector(`.entry-block[data-cat-id="${cat.id}"]`);
+    if(!block) return;
+    const entry = (snap.entries && snap.entries[cat.id]) || null;
+    if(cat.type==='ratio'){
+      (entry||[]).forEach(it=>makeRatioRow(block.querySelector('[data-rowlist]'), cat, it));
+    } else if(cat.type==='value'){
+      (entry||[]).forEach(it=>makeValueRow(block.querySelector('[data-rowlist]'), cat.unit, it));
+    } else {
+      block.querySelector('[data-status]').value = (entry && entry.status) || cat.options[0];
+      block.querySelector('[data-note]').value = (entry && entry.note) || '';
+    }
+  });
+}
+
+function applyTemplateFromLatest(latest, blankValues){
+  clearEntryRows();
+  config.categories.forEach(cat=>{
+    const block = document.querySelector(`.entry-block[data-cat-id="${cat.id}"]`);
+    if(!block) return;
+    const entry = latest && latest.entries && latest.entries[cat.id];
+    if(cat.type==='ratio'){
+      (entry||[]).forEach(it=>makeRatioRow(block.querySelector('[data-rowlist]'), cat, {name:it.name, totalV:it.totalV, usedV: blankValues?'':it.usedV}));
+    } else if(cat.type==='value'){
+      (entry||[]).forEach(it=>makeValueRow(block.querySelector('[data-rowlist]'), cat.unit, {name:it.name, v: blankValues?'':it.v}));
+    } else if(entry){
+      block.querySelector('[data-status]').value = entry.status || cat.options[0];
+      block.querySelector('[data-note]').value = blankValues ? '' : (entry.note||'');
+    }
+  });
+}
+
+function readEntries(){
+  const entries = {};
+  config.categories.forEach(cat=>{
+    const block = document.querySelector(`.entry-block[data-cat-id="${cat.id}"]`);
+    if(!block) return;
+    if(cat.type==='ratio') entries[cat.id] = readRatioRows(block.querySelector('[data-rowlist]'));
+    else if(cat.type==='value') entries[cat.id] = readValueRows(block.querySelector('[data-rowlist]'));
+    else entries[cat.id] = { status: block.querySelector('[data-status]').value, note: block.querySelector('[data-note]').value.trim() };
+  });
+  return entries;
+}
+
+$('loadPrev').addEventListener('click', ()=>{
+  if(!snapshots.length){ showMsg($('entryMsg'), '불러올 이전 기록이 없습니다.', true); return; }
+  applyTemplateFromLatest(snapshots[snapshots.length-1], true);
+});
+
+function refreshEditingNote(dateStr){
+  $('editingNote').hidden = !snapshots.find(s=>s.date===dateStr);
+}
+
+$('dateInput').addEventListener('change', ()=>{
+  const d = $('dateInput').value;
+  const existing = snapshots.find(s=>s.date===d);
+  if(existing) applySnapshotToForm(existing);
+  refreshEditingNote(d);
+});
+
+// ================= db =================
+async function initDb(){
+  const statusEl = $('dbStatus');
+  if(!window.claude || !window.claude.use){
+    statusEl.textContent = '저장 기능을 사용할 수 없는 환경입니다 (미리보기만 가능)';
+    statusEl.classList.add('err');
+    renderAll();
+    return;
+  }
+  try{ db = await window.claude.use('db'); }catch(e){ db = null; }
+  if(!db){
+    statusEl.textContent = '저장 기능을 사용할 수 없습니다 (미리보기만 가능)';
+    statusEl.classList.add('err');
+    renderAll();
+    return;
+  }
+  statusEl.textContent = '';
+
+  db.doc('config/main').onSnapshot(snap=>{
+    if(snap.exists){
+      const data = snap.data();
+      config = { categories: Array.isArray(data.categories) ? data.categories : [] };
+    }
+    renderAll();
+  });
+
+  db.collection('snapshots').orderBy('date','asc').limit(365).onSnapshot(
+    snap => {
+      snapshots = snap.docs.map(d=>d.data()).filter(Boolean);
+      renderReport();
+      if(firstLoad && config.categories.length){
+        firstLoad = false;
+        const existing = snapshots.find(s=>s.date===$('dateInput').value);
+        if(existing) applySnapshotToForm(existing);
+        else if(snapshots.length) applyTemplateFromLatest(snapshots[snapshots.length-1], true);
+        refreshEditingNote($('dateInput').value);
+      }
+    },
+    err => { statusEl.textContent = '데이터를 불러오지 못했습니다: ' + err.message; statusEl.classList.add('err'); }
+  );
+}
+
+async function saveConfig(){
+  if(!db) return;
+  try{ await db.doc('config/main').set({ categories: config.categories }); }
+  catch(e){ showMsg($('setupMsg'), '설정 저장 실패: ' + e.message, true); }
+}
+
+$('saveBtn').addEventListener('click', async ()=>{
+  if(!db) return;
+  const dateStr = $('dateInput').value || todayStr();
+  const body = { date: dateStr, entries: readEntries(), savedAt: new Date().toISOString() };
+  $('saveBtn').disabled = true;
+  try{
+    await db.collection('snapshots').doc(dateStr).set(body);
+    $('savedNote').hidden = false;
+    setTimeout(()=>$('savedNote').hidden = true, 2000);
+  }catch(e){ showMsg($('entryMsg'), '저장 실패: ' + e.message, true); }
+  $('saveBtn').disabled = false;
+});
+
+$('deleteBtn').addEventListener('click', function(){
+  if(!db) return;
+  const dateStr = $('dateInput').value;
+  if(!snapshots.find(s=>s.date===dateStr)){ showMsg($('entryMsg'), '이 날짜에는 저장된 기록이 없습니다.', true); return; }
+  armThenConfirm(this, async ()=>{
+    try{
+      await db.collection('snapshots').doc(dateStr).delete();
+      applyTemplateFromLatest(snapshots[snapshots.length-2] || null, true);
+    }catch(e){ showMsg($('entryMsg'), '삭제 실패: ' + e.message, true); }
+  }, '다시 누르면 삭제됩니다');
+});
+
+// ================= 차트 헬퍼 =================
+function svgEl(tag,attrs){
+  const ns='http://www.w3.org/2000/svg';
+  const e=document.createElementNS(ns,tag);
+  for(const k in attrs) e.setAttribute(k,attrs[k]);
+  return e;
+}
+function drawMultiLine(svg, dates, series, opts){
+  svg.innerHTML = '';
+  const W=720, H=Number(opts.height)||220, padL=38, padR=14, padT=14, padB=26;
+  const innerW=W-padL-padR, innerH=H-padT-padB;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  if(dates.length < 2) return false;
+  let maxV = 1;
+  series.forEach(s=>s.values.forEach(v=>{ if(v!=null && v>maxV) maxV=v; }));
+  if(opts.suggestedMax) maxV = Math.max(maxV, opts.suggestedMax);
+  maxV = maxV * 1.15;
+  const x = i => padL + (i/(dates.length-1))*innerW;
+  const y = v => padT + innerH - (v/maxV)*innerH;
+  [0,0.5,1].forEach(t=>{
+    const gy = padT + innerH - t*innerH;
+    svg.appendChild(svgEl('line',{class:'gridline',x1:padL,x2:W-padR,y1:gy,y2:gy}));
+    const lab = svgEl('text',{class:'axis-label',x:4,y:gy+3});
+    lab.textContent = Math.round(maxV*t) + (opts.unit||'');
+    svg.appendChild(lab);
+  });
+  const tickIdx = dates.length<=6 ? dates.map((_,i)=>i) : [0, Math.floor((dates.length-1)/2), dates.length-1];
+  tickIdx.forEach(i=>{
+    const lab = svgEl('text',{class:'axis-label',x:x(i),y:H-6,'text-anchor':'middle'});
+    lab.textContent = dates[i].slice(5);
+    svg.appendChild(lab);
+  });
+  series.forEach(s=>{
+    let d=''; let started=false;
+    s.values.forEach((v,i)=>{
+      if(v==null){ started=false; return; }
+      d += (started?'L':'M') + x(i) + ',' + y(v) + ' ';
+      started = true;
+    });
+    if(d) svg.appendChild(svgEl('path',{d:d.trim(),fill:'none',stroke:s.color,'stroke-width':2,'stroke-linecap':'round','stroke-linejoin':'round'}));
+    s.values.forEach((v,i)=>{ if(v==null) return; svg.appendChild(svgEl('circle',{cx:x(i),cy:y(v),r:3,fill:s.color})); });
+  });
+  return true;
+}
+function renderLegend(el, series){
+  el.innerHTML = series.map(s=>`<span class="item"><span class="dot" style="background:${s.color}"></span>${s.name}</span>`).join('');
+}
+function linearForecast(pts){
+  const x0 = new Date(pts[0].date+'T00:00:00').getTime();
+  const xs = pts.map(p=>(new Date(p.date+'T00:00:00').getTime()-x0)/86400000);
+  const ys = pts.map(p=>p.v);
+  const n = xs.length;
+  const sumX=xs.reduce((a,b)=>a+b,0), sumY=ys.reduce((a,b)=>a+b,0);
+  const sumXY=xs.reduce((a,x,i)=>a+x*ys[i],0), sumXX=xs.reduce((a,x)=>a+x*x,0);
+  const denom = n*sumXX - sumX*sumX;
+  const slope = denom!==0 ? (n*sumXY - sumX*sumY)/denom : 0;
+  const intercept = (sumY - slope*sumX)/n;
+  const lastX = xs[xs.length-1];
+  return { dailyGrowth: slope, forecast30: intercept + slope*(lastX+30) };
+}
+
+// ================= 렌더 =================
+function renderAll(){
+  const hasCats = config.categories.length > 0;
+  $('entryCard').hidden = !hasCats;
+  $('reportArea').hidden = !hasCats;
+  $('noCatState').hidden = hasCats;
+  renderCatList();
+  if(hasCats){
+    if(!$('dateInput').value) $('dateInput').value = todayStr();
+    buildEntryBlocks();
+    buildChartArea();
+    renderReport();
+  }
+}
+
+function buildChartArea(){
+  const area = $('chartArea');
+  area.innerHTML = '';
+  config.categories.forEach(cat=>{
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.dataset.catId = cat.id;
+    if(cat.type==='ratio'){
+      card.innerHTML = `<h2>${cat.name} — 비율 추이</h2>
+        <div class="chart-wrap"><svg viewBox="0 0 720 220" data-chart></svg></div>
+        <div class="legend" data-legend></div>
+        <p class="overflow-note" data-overflow hidden></p>`;
+    } else if(cat.type==='value'){
+      card.innerHTML = `<h2>${cat.name} — 추이 및 예측</h2>
+        <div class="chart-wrap"><svg viewBox="0 0 720 220" data-chart></svg></div>
+        <div class="legend" data-legend></div>
+        <p class="overflow-note" data-overflow hidden></p>
+        <div class="table-wrap" style="margin-top:14px;">
+          <table><thead><tr><th>항목</th><th class="num">현재</th><th class="num">일 평균 증가</th><th class="num">30일 후 예상</th></tr></thead>
+          <tbody data-forecast></tbody></table>
+        </div>`;
+    } else {
+      card.innerHTML = `<h2>${cat.name} — 최근 30일</h2>
+        <div class="backup-strip" data-strip></div>`;
+    }
+    area.appendChild(card);
+  });
+}
+
+function renderReport(){
+  const latest = snapshots[snapshots.length-1];
+  const dates = snapshots.map(s=>s.date);
+
+  const tilesEl = $('statusTiles'), dateNote = $('latestDateNote');
+  if(!latest){
+    dateNote.textContent = '아직 저장된 기록이 없습니다 — 위에서 오늘 값을 입력해 보세요';
+    tilesEl.innerHTML = '';
+  } else {
+    dateNote.textContent = `최근 기록: ${latest.date}`;
+    tilesEl.innerHTML = config.categories.map(cat=>{
+      const entry = (latest.entries && latest.entries[cat.id]) || null;
+      if(cat.type==='ratio'){
+        const list = entry||[];
+        const top = list.reduce((m,it)=>{
+          const pct = it.totalV>0 ? it.usedV/it.totalV*100 : 0;
+          return pct>m.pct ? {name:it.name, pct} : m;
+        }, {name:'-', pct:-1});
+        const cls = top.pct>=cat.crit ? 'crit' : top.pct>=cat.warn ? 'warn' : '';
+        return `<div class="tile ${cls}"><p class="label">${cat.name} · 최고</p><p class="value">${top.name}</p><p class="sub2 mono">${top.pct>=0?top.pct.toFixed(1):'-'}%</p></div>`;
+      }
+      if(cat.type==='value'){
+        const list = entry||[];
+        const sum = list.reduce((a,it)=>a+it.v,0);
+        return `<div class="tile"><p class="label">${cat.name} · 합계</p><p class="value mono">${sum.toLocaleString()}${cat.unit?(' '+cat.unit):''}</p><p class="sub2">${list.length}개 항목</p></div>`;
+      }
+      const ok = entry && entry.status === cat.options[0];
+      return `<div class="tile ${ok?'':'crit'}"><p class="label">${cat.name}</p><p class="value">${entry?entry.status:'-'}</p><p class="sub2">${entry&&entry.note?entry.note:''}</p></div>`;
+    }).join('');
+  }
+
+  config.categories.forEach(cat=>{
+    const card = document.querySelector(`#chartArea .card[data-cat-id="${cat.id}"]`);
+    if(!card) return;
+    if(cat.type==='ratio'){
+      const namesAll = []; snapshots.forEach(s=>{ ((s.entries&&s.entries[cat.id])||[]).forEach(it=>{ if(!namesAll.includes(it.name)) namesAll.push(it.name); }); });
+      const names = namesAll.slice(0, MAX_SERIES);
+      const series = names.map((name,i)=>({ name, color:SERIES_COLORS[i%8],
+        values: snapshots.map(s=>{ const it=((s.entries&&s.entries[cat.id])||[]).find(x=>x.name===name); return it && it.totalV>0 ? it.usedV/it.totalV*100 : null; }) }));
+      const ok = drawMultiLine(card.querySelector('[data-chart]'), dates, series, {unit:'%', suggestedMax:100, height:220});
+      const legendEl = card.querySelector('[data-legend]');
+      if(!ok){ card.querySelector('[data-chart]').innerHTML=''; legendEl.innerHTML = `<p class="empty-note" style="width:100%;">최소 2일 이상 기록되면 추이가 표시됩니다</p>`; }
+      else renderLegend(legendEl, series);
+      const ov = card.querySelector('[data-overflow]');
+      ov.hidden = namesAll.length<=MAX_SERIES;
+      if(namesAll.length>MAX_SERIES) ov.textContent = `그 외 ${namesAll.length-MAX_SERIES}개는 표시되지 않았습니다`;
+    } else if(cat.type==='value'){
+      const namesAll = []; snapshots.forEach(s=>{ ((s.entries&&s.entries[cat.id])||[]).forEach(it=>{ if(!namesAll.includes(it.name)) namesAll.push(it.name); }); });
+      const names = namesAll.slice(0, MAX_SERIES);
+      const series = names.map((name,i)=>({ name, color:SERIES_COLORS[i%8],
+        values: snapshots.map(s=>{ const it=((s.entries&&s.entries[cat.id])||[]).find(x=>x.name===name); return it ? it.v : null; }) }));
+      const ok = drawMultiLine(card.querySelector('[data-chart]'), dates, series, {unit:cat.unit?(' '+cat.unit):'', height:220});
+      const legendEl = card.querySelector('[data-legend]');
+      if(!ok){ card.querySelector('[data-chart]').innerHTML=''; legendEl.innerHTML = `<p class="empty-note" style="width:100%;">최소 2일 이상 기록되면 추이가 표시됩니다</p>`; }
+      else renderLegend(legendEl, series);
+      const ov = card.querySelector('[data-overflow]');
+      ov.hidden = namesAll.length<=MAX_SERIES;
+      if(namesAll.length>MAX_SERIES) ov.textContent = `그 외 ${namesAll.length-MAX_SERIES}개는 표시되지 않았습니다`;
+
+      const rows = namesAll.map(name=>{
+        const pts = snapshots.map(s=>{ const it=((s.entries&&s.entries[cat.id])||[]).find(x=>x.name===name); return it ? {date:s.date, v:it.v} : null; }).filter(Boolean);
+        if(pts.length<2) return `<tr><td>${name}</td><td class="num mono">${pts[0]?pts[0].v:'-'}</td><td class="num" colspan="2" style="text-align:center;color:var(--muted);">데이터 더 필요</td></tr>`;
+        const {dailyGrowth, forecast30} = linearForecast(pts);
+        const last = pts[pts.length-1];
+        return `<tr><td>${name}</td><td class="num mono">${last.v}</td><td class="num mono">${dailyGrowth>=0?'+':''}${dailyGrowth.toFixed(2)}</td><td class="num mono">${forecast30.toFixed(1)}</td></tr>`;
+      });
+      card.querySelector('[data-forecast]').innerHTML = rows.length ? rows.join('') : `<tr><td colspan="4" class="empty-note">아직 기록이 없습니다</td></tr>`;
+    } else {
+      const last30 = snapshots.slice(-30);
+      card.querySelector('[data-strip]').innerHTML = last30.length
+        ? last30.map(s=>{ const e=(s.entries&&s.entries[cat.id]); const ok = e && e.status===cat.options[0]; return `<div class="backup-day ${ok?'ok':'fail'}" title="${s.date} · ${e?e.status:''}"></div>`; }).join('')
+        : '<p class="empty-note">아직 기록이 없습니다</p>';
+    }
+  });
+}
+
+initDb();
+</script>
