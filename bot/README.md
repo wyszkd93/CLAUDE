@@ -14,6 +14,7 @@
 | `ANTHROPIC_API_KEY` | O | Claude API 키 |
 | `BOT_MODEL` | | 기본 `claude-opus-5-5` |
 | `BOT_EFFORT` | | 기본 `low` (`low`/`medium`/`high`) |
+| `WEBHOOK_SECRET` | | 설정 시 `X-Webhook-Secret` 헤더가 일치하는 요청만 처리 (카카오 웹훅 등록의 "헤더 값"에 같은 값 입력) |
 | `LOG_RAW_EVENTS` | | 기본 `1` — 수신 이벤트 원문(토큰 마스킹)을 로그에 남김 |
 
 비밀값은 코드나 저장소에 넣지 말고 배포 플랫폼의 환경변수 설정에만 입력합니다.

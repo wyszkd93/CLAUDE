@@ -1,3 +1,4 @@
+import hmac
 import json
 import logging
 import time
@@ -14,17 +15,24 @@ log = logging.getLogger("main")
 app = FastAPI(title="chukchuk-manager")
 
 QUICK_REPLIES = ["도움말", "처음부터"]
-_seen_tokens: dict[str, float] = {}  # 중복 이벤트 방지 (callbackToken 기준, 10분 보관)
+_seen_events: dict[str, float] = {}  # 중복 이벤트 방지 (d.id 기준, 10분 보관)
 
 
-def _is_duplicate(token: str) -> bool:
+def _is_duplicate(event_id: str) -> bool:
     now = time.time()
-    for k in [k for k, t in _seen_tokens.items() if now - t > 600]:
-        _seen_tokens.pop(k, None)
-    if token in _seen_tokens:
+    for k in [k for k, t in _seen_events.items() if now - t > 600]:
+        _seen_events.pop(k, None)
+    if event_id in _seen_events:
         return True
-    _seen_tokens[token] = now
+    _seen_events[event_id] = now
     return False
+
+
+def _authorized(request: Request) -> bool:
+    if not config.WEBHOOK_SECRET:
+        return True
+    got = request.headers.get(config.WEBHOOK_SECRET_HEADER, "")
+    return hmac.compare_digest(got.encode(), config.WEBHOOK_SECRET.encode())
 
 
 async def handle_message(ev) -> None:
@@ -48,12 +56,16 @@ async def handle_message(ev) -> None:
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "model": config.CLAUDE_MODEL, "bot_token_set": bool(config.KAKAO_BOT_TOKEN)}
+    return {"status": "ok", "model": config.CLAUDE_MODEL, "bot_token_set": bool(config.KAKAO_BOT_TOKEN),
+            "webhook_secret_set": bool(config.WEBHOOK_SECRET)}
 
 
 @app.post("/webhook")
 async def webhook(request: Request, background: BackgroundTasks):
     # 문서: 1초 안에 2xx 응답. 무거운 처리는 응답 후 백그라운드에서.
+    if not _authorized(request):
+        log.warning("unauthorized webhook request rejected")
+        return JSONResponse({"ok": False}, status_code=401)
     try:
         payload = await request.json()
     except (json.JSONDecodeError, UnicodeDecodeError):
@@ -65,7 +77,7 @@ async def webhook(request: Request, background: BackgroundTasks):
     ev = parse_message(payload)
     if ev is None:
         log.info("ignored event type=%r", event_type(payload) if isinstance(payload, dict) else None)
-    elif _is_duplicate(ev.callback_token):
+    elif _is_duplicate(ev.event_id):
         log.info("duplicate event ignored")
     else:
         background.add_task(handle_message, ev)

@@ -1,17 +1,20 @@
 """카카오톡 봇 DISPATCH 이벤트 파싱.
 
-문서로 확인된 것: op=DISPATCH, 메시지 이벤트 MESSAGE_CREATE, 콜백 토큰은 d.callbackToken.
-발화 텍스트/사용자 키의 정확한 필드명은 문서에 없어 후보 경로를 순서대로 시도한다.
-실제 페이로드를 로그로 확인한 뒤 후보 목록을 확정할 것.
+실제 수신 예 (2026-10-26, 채널채팅):
+{"op": 0, "t": "MESSAGE_CREATE",
+ "d": {"id": 9023..., "type": "MESSAGE_CREATE", "isChannelChatroom": true,
+       "botGroupKey": "bg2_...", "botUserKey": "bu2_...", "content": "안녕",
+       "timestamp": "...", "callbackToken": "..."}}
+확인된 필드를 먼저 보고, 형식이 바뀔 경우를 대비해 후보 경로도 남겨 둔다.
 """
 from dataclasses import dataclass
 from typing import Any
 
 TEXT_PATHS = [
+    ("content",),
     ("message", "text"),
     ("message", "content"),
     ("text",),
-    ("content",),
     ("utterance",),
     ("userRequest", "utterance"),
 ]
@@ -33,6 +36,8 @@ class MessageEvent:
     user_key: str
     room_key: str
     event_type: str
+    event_id: str
+    is_channel: bool
 
 
 def _dig(obj: Any, path: tuple) -> Any:
@@ -65,7 +70,7 @@ def parse_message(payload: dict) -> MessageEvent | None:
     d = payload.get("d")
     if not isinstance(d, dict):
         return None
-    etype = event_type(payload)
+    etype = event_type(payload) or str(d.get("type") or "")
     if etype and etype != "MESSAGE_CREATE":
         return None
     token = d.get("callbackToken")
@@ -78,6 +83,8 @@ def parse_message(payload: dict) -> MessageEvent | None:
         user_key=_first_str(d, USER_PATHS) or "anonymous",
         room_key=_first_str(d, ROOM_PATHS),
         event_type=etype or "MESSAGE_CREATE",
+        event_id=str(d.get("id") or token),
+        is_channel=bool(d.get("isChannelChatroom")),
     )
 
 

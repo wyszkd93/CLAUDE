@@ -8,14 +8,18 @@ from app.events import parse_message, redact
 
 
 def msg(**d):
-    base = {"callbackToken": "cb-1", "message": {"text": "안녕"}, "botUserKey": "u1"}
+    # 2026-10-26 실제 수신 형식
+    base = {"id": 902394610299440355, "isChannelChatroom": True, "botGroupKey": "bg2_x",
+            "botUserKey": "u1", "content": "안녕", "timestamp": "2026-10-26T03:14:00Z",
+            "callbackToken": "cb-1", "type": "MESSAGE_CREATE"}
     base.update(d)
-    return {"op": "DISPATCH", "t": "MESSAGE_CREATE", "d": base}
+    return {"op": 0, "d": base, "t": "MESSAGE_CREATE"}
 
 
 def test_parse_message_basic():
     ev = parse_message(msg())
     assert ev and ev.callback_token == "cb-1" and ev.text == "안녕" and ev.user_key == "u1"
+    assert ev.room_key == "bg2_x" and ev.event_id == "902394610299440355" and ev.is_channel
 
 
 def test_parse_ignores_other_events_and_missing_token():
@@ -60,7 +64,7 @@ def test_webhook_fast_ack_and_callback(monkeypatch):
 
     monkeypatch.setattr(agent, "answer", fake_answer)
     monkeypatch.setattr(kakao, "send_callback", fake_send)
-    main._seen_tokens.clear()
+    main._seen_events.clear()
     c = TestClient(main.app)
     t0 = time.time()
     r = c.post("/webhook", json=msg())
@@ -84,8 +88,8 @@ def test_webhook_agent_failure_sends_apology(monkeypatch):
 
     monkeypatch.setattr(agent, "answer", boom)
     monkeypatch.setattr(kakao, "send_callback", fake_send)
-    main._seen_tokens.clear()
-    r = TestClient(main.app).post("/webhook", json=msg(callbackToken="cb-2"))
+    main._seen_events.clear()
+    r = TestClient(main.app).post("/webhook", json=msg(callbackToken="cb-2", id=2))
     assert r.status_code == 200
     assert "문제가 생겼어요" in sent[0]["template"]["outputs"][0]["simpleText"]["text"]
 
@@ -101,3 +105,24 @@ def test_health():
 
 def test_knowledge_skips_readme():
     assert "README" not in agent.load_knowledge()
+
+
+def test_webhook_secret(monkeypatch):
+    sent = []
+
+    async def fake_answer(user_key, text):
+        return "ok"
+
+    async def fake_send(token, skill):
+        sent.append(token)
+        return True
+
+    monkeypatch.setattr(agent, "answer", fake_answer)
+    monkeypatch.setattr(kakao, "send_callback", fake_send)
+    monkeypatch.setattr(main.config, "WEBHOOK_SECRET", "s3cret")
+    main._seen_events.clear()
+    c = TestClient(main.app)
+    assert c.post("/webhook", json=msg(id=10)).status_code == 401
+    assert c.post("/webhook", json=msg(id=11), headers={"X-Webhook-Secret": "wrong"}).status_code == 401
+    assert c.post("/webhook", json=msg(id=12), headers={"X-Webhook-Secret": "s3cret"}).status_code == 200
+    assert sent == ["cb-1"]

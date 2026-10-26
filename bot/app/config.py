@@ -16,3 +16,7 @@ KNOWLEDGE_DIR = os.environ.get("KNOWLEDGE_DIR", os.path.join(os.path.dirname(__f
 KNOWLEDGE_MAX_CHARS = int(os.environ.get("KNOWLEDGE_MAX_CHARS", "200000"))
 
 LOG_RAW_EVENTS = os.environ.get("LOG_RAW_EVENTS", "1") == "1"
+
+# 카카오 웹훅 등록 시 "헤더 값 입력"에 넣은 비밀값. 설정되면 이 헤더가 일치하는 요청만 처리한다.
+WEBHOOK_SECRET_HEADER = os.environ.get("WEBHOOK_SECRET_HEADER", "X-Webhook-Secret")
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
