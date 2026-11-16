@@ -1,0 +1,12 @@
+{
+  "name": "persona-engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "페르소나 엔진 초안: compose / flair / canned / guardOutput (의존성 없음)",
+  "scripts": {
+    "test": "node --test \"src/**/*.test.ts\"",
+    "test:schema": "python3 -I scripts/check_schema.py"
+  },
+  "engines": { "node": ">=22.18" }
+}
