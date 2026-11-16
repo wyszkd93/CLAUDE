@@ -91,6 +91,7 @@ interface MemoryStore {
 - 어댑터는 `complete()` 하나만 구현합니다. 인증 오류, 크레딧 부족, 타임아웃은 타입이 있는 오류로 구분해 UI가 안내할 수 있게 합니다.
 - **모델 ID는 코드에 박지 않고 설정으로 받습니다.** 모델명은 자주 바뀌어서, 구현 시점에 각 벤더 공식 문서로 확인해야 합니다(이 문서에는 특정 모델명을 적지 않았습니다).
 - 키는 평문 파일 대신 OS 키체인에 저장합니다(shisa-agent는 `config.json` 평문, 권한 600).
+- 구현(Anthropic): `src/anthropic.ts`의 `createAnthropicProvider`. 공식 SDK(`@anthropic-ai/sdk`)를 쓰고, 인증은 SDK가 환경(`ANTHROPIC_API_KEY` 등)에서 해석하므로 키를 코드·설정 파일에 두지 않습니다. 코어(`index.ts`)는 이 파일을 가져오지 않아 SDK 없이도 쓸 수 있습니다. 오류는 `ProviderError`(종류·재시도 가능 여부)로 분류하고, 인증·결제·거부·잘못된 요청은 재시도하지 않습니다. 기본 모델은 스킬 문서 기준 `claude-opus-5-5`이며 옵션이나 요청의 `model`로 덮어씁니다(구현 시점에 공식 문서로 재확인 필요). 실제 호출 평가는 `scripts/live-eval.ts`(`CONFIRM_SPEND=1` 필요).
 
 ## 6. 평가 (말투 일관성)
 shisa-agent에는 이 부분이 보이지 않아 새로 설계합니다.

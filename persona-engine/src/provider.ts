@@ -8,6 +8,32 @@ export interface ProviderAdapter {
   complete(req: CompleteRequest): Promise<string>;
 }
 
+export type ProviderErrorKind =
+  | "auth" | "billing" | "rate_limit" | "refusal" | "truncated" | "bad_request"
+  | "not_found" | "timeout" | "network" | "server" | "aborted" | "unknown";
+
+const RETRYABLE: ReadonlySet<ProviderErrorKind> = new Set(["rate_limit", "timeout", "network", "server"]);
+
+/**
+ * 프로바이더 오류를 벤더와 무관하게 분류한다. retryable=false 인 오류(인증·결제·거부·잘못된 요청 등)는
+ * 같은 요청을 다시 보내도 같은 결과이므로 호출자가 재시도하지 않는다.
+ */
+export class ProviderError extends Error {
+  readonly kind: ProviderErrorKind;
+  readonly retryable: boolean;
+  readonly status?: number;
+  /** refusal 일 때 정책 분류(예: cyber). 알 수 없으면 undefined */
+  readonly category?: string;
+  constructor(kind: ProviderErrorKind, message: string, o: { status?: number; category?: string; cause?: unknown } = {}) {
+    super(message, o.cause === undefined ? undefined : { cause: o.cause });
+    this.name = "ProviderError";
+    this.kind = kind;
+    this.retryable = RETRYABLE.has(kind);
+    this.status = o.status;
+    this.category = o.category;
+  }
+}
+
 export type FakeReply = string | Error | ((req: CompleteRequest, callIndex: number) => string | Error);
 export type FakeRule = {
   /** 마지막 user 메시지에 매치(정규식) 또는 요청 전체로 판정(함수). 생략하면 항상 매치. */

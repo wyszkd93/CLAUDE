@@ -2,7 +2,7 @@ import { canned } from "./canned.ts";
 import { compose } from "./compose.ts";
 import { flair } from "./flair.ts";
 import { guardOutput } from "./guard.ts";
-import type { ProviderAdapter } from "./provider.ts";
+import { ProviderError, type ProviderAdapter } from "./provider.ts";
 import type { MemorySnippet, Message, MessageKind, Mood, Persona } from "./types.ts";
 
 export const DEFAULT_MAX_RETRIES = 1; // 설계서 3.3 의 가정값
@@ -89,6 +89,7 @@ export async function respondJson(i: RespondJsonInput): Promise<RespondJsonResul
     } catch (e) {
       if (i.signal?.aborted) throw e;
       reasons = [`프로바이더 오류: ${(e as Error).message}`];
+      if (e instanceof ProviderError && !e.retryable) break; // 인증·결제·거부 등은 다시 보내도 같다
       continue; // 같은 messages 로 다시 시도
     }
     const obj = extractJson(raw);
