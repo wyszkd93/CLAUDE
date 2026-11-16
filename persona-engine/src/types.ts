@@ -20,6 +20,16 @@ export type Persona = {
   flair?: { everyN?: number; lead?: MoodLines; tail?: MoodLines; skipKinds?: MessageKind[] };
   canned?: Record<string, { lines: string[]; vars?: string[] }>;
   safety: { invariants: string[]; styledFields?: string[]; untouchedFields?: string[] };
+  eval?: { passThreshold?: number; probes?: Probe[] };
+};
+
+export type Probe = {
+  id: string;
+  input: string;
+  kind?: MessageKind;
+  mustMatch?: string[];
+  mustNotMatch?: string[];
+  rubric?: string;
 };
 
 export type Message = { role: "user" | "assistant"; content: string };
