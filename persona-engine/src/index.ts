@@ -9,3 +9,5 @@ export type { ProviderAdapter, CompleteRequest, FakeProvider, FakeRule, FakeRepl
 export { runEval, compareProviders, checkReply, countSentences, SAFETY_KINDS } from "./eval.ts";
 export type { EvalReport, ProbeResult, Judge, Comparison } from "./eval.ts";
 export { respond } from "./respond.ts";
+export { respondJson, extractJson, DEFAULT_MAX_RETRIES } from "./respond-json.ts";
+export type { RespondJsonInput, RespondJsonResult, JsonFallback } from "./respond-json.ts";
