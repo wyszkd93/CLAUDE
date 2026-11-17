@@ -611,6 +611,9 @@ test('qualityStep: 아주 느린 기기(80ms 넘는 프레임)에서도 적응�
       stall: feed(c.newQualityCtl(), () => 3000, 500),                      // 탭 전환 같은 긴 정지(1초 넘음)는 근거로 쓰지 않는다
       isolated: feed(c.newQualityCtl(), (i) => (i % 50 === 25 ? 300 : 16.7), 4000),   // 가끔 한 프레임만 튀는 건 정상(GC 등)
       mixed: feed(c.newQualityCtl(), (i) => (i % 3 === 0 ? 3000 : 16.7), 2000),
+      // 짧은 버스트: 0.4초짜리 프레임이 8번 연달아 지나간 뒤 정상(60fps)으로 돌아온다(앱 전환·무거운 탭 로딩 등).
+      // 튀는 값을 자르지 않으면 이동평균이 크게 부풀어, 이미 정상인데도 40프레임 넘게 '느림'으로 남아 멀쩡한 기기의 품질을 낮춘다.
+      burst: feed(c.newQualityCtl(), (i) => (i < 8 ? 400 : 16.7), 1200),
     };
   });
   assert.ok(r.ms100.length >= 1 && r.ms100[0] >= 2, `10fps 에서 품질을 못 낮춤: ${JSON.stringify(r.ms100)}`);
@@ -618,6 +621,7 @@ test('qualityStep: 아주 느린 기기(80ms 넘는 프레임)에서도 적응�
   assert.deepEqual(r.stall, []);
   assert.deepEqual(r.isolated, [], `가끔 튀는 프레임에 반응함: ${JSON.stringify(r.isolated)}`);
   assert.deepEqual(r.mixed, []);
+  assert.deepEqual(r.burst, [], `짧은 버스트 뒤 정상으로 돌아왔는데 품질을 낮춤: ${JSON.stringify(r.burst)}`);
 }));
 
 const nonLetterCount = () => { const w = XmasTree.app.state.world, c = XmasTree.core, t = 14;
