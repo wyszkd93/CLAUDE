@@ -162,13 +162,14 @@
   const newQualityCtl = () => ({ level: 0, ema: 1000 / 60, slow: 0, fast: 0, hold: 0, lastChange: -1e9, ups: 0 });
   /**
    * 렌더된 프레임 사이 간격(dtMs)을 보고 품질 단계를 올리거나 내린다. 바뀌면 새 단계를, 아니면 null 을 돌려준다.
+   * 1초 넘는 간격은 탭 전환 같은 정지로 보고 무시하고, 그 밑은 느림의 근거로 쓴다(아주 느린 기기도 적응해야 하므로).
    * 느림(약 45fps 미만)이 40프레임 계속되면 한 단계(25fps 미만이면 20프레임 뒤 두 단계) 낮추고, 충분히 빠름(55fps 이상)이 6초 계속되면
    * (마지막 변경 15초 뒤, 최대 2번) 한 단계 올린다. 바뀐 직후 12프레임은 재구성 비용 때문에 재지 않는다.
    */
   function qualityStep(ctl, dtMs, nowMs) {
-    if (!(dtMs > 0) || dtMs > 80) return null;                 // 탭 전환·정지 직후의 긴 간격은 무시
+    if (!(dtMs > 0) || dtMs > 1000) return null;               // 탭 전환·정지 직후의 긴 정지(1초 넘음)만 무시: 정말 느린 기기(10fps 이하)는 반드시 적응해야 한다
     if (ctl.hold > 0) { ctl.hold--; return null; }
-    ctl.ema += (dtMs - ctl.ema) * 0.08;
+    ctl.ema += (Math.min(dtMs, 120) - ctl.ema) * 0.08;         // 한 프레임이 튀어도(GC 등) 한 번에 크게 흔들리지 않도록 잘라서 반영
     if (ctl.ema > 22) { ctl.slow++; ctl.fast = 0; } else if (ctl.ema < 18.2) { ctl.fast++; ctl.slow = 0; } else { ctl.slow = 0; ctl.fast = 0; }
     const change = (lv, up) => { ctl.level = lv; ctl.slow = 0; ctl.fast = 0; ctl.hold = 12; ctl.ema = 1000 / 60; ctl.lastChange = nowMs; if (up) ctl.ups++; return lv; };
     const veryslow = ctl.ema > 40;                              // 약 25fps 미만이면 두 단계씩, 더 빨리 내린다
@@ -370,7 +371,7 @@
     const bgCanvas = document.getElementById('bg') || mk(1, 1);       // 정적 배경(한 번만 그린다)
     const glowEl = document.getElementById('glow');                   // 바닥 빛(CSS 로 합성, 투명도만 바꾼다)
     const state = { t: 0, paused: false, hud: true, spin: 15, fps: 60, dpr: 1, dprFull: 1, view: null, world: null,
-      lastItems: 0, lastOrder: null, qLevel: 0, qAuto: true, atlasMs: 0, atlasBuilds: 0, blits: 0 };
+      lastItems: 0, lastOrder: null, simCostMs: 0, qLevel: 0, qAuto: true, atlasMs: 0, atlasBuilds: 0, blits: 0 };
     let atlas = null, halos = null, twinkle = null, snow = null, buf = null, glowOpacity = '';
     const ctl = newQualityCtl();
     const rgb = (c) => 'rgb(' + c.map((v) => Math.round(clamp(v, 0, 255))).join(',') + ')';
@@ -536,6 +537,7 @@
     }
 
     function draw(t) {
+      if (state.simCostMs > 0) { const end = performance.now() + state.simCostMs; while (performance.now() < end); }   // 느린 기기 흉내(테스트용). 기본 0
       const world = state.world, view = state.view, dpr = state.dpr, lad = LADDER[state.qLevel];
       const { w, h, focal } = view, A = atlas;
       const angle = angleDeg(state.spin, t), a = angle * Math.PI / 180, ca = Math.cos(a), sa = Math.sin(a);

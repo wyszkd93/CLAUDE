@@ -391,7 +391,7 @@ test('qualityStep: 계속 느리면 한 단계씩 낮추고, 충분히 오래 �
     const feed = (ctl, ms, n, t0) => { let ch = []; for (let i = 0; i < n; i++) { const v = c.qualityStep(ctl, ms, t0 + i * ms); if (v !== null) ch.push(v); } return ch; };
     const a = c.newQualityCtl(); const slow = feed(a, 30, 200, 0);              // 33fps 가 계속
     const b = c.newQualityCtl(); const ok = feed(b, 16.7, 2000, 0);             // 60fps 가 계속 → 변화 없음
-    const d = c.newQualityCtl(); const spikes = feed(d, 200, 500, 0).concat(feed(d, 0, 100, 0), feed(d, -5, 100, 0), feed(d, NaN, 100, 0));
+    const d = c.newQualityCtl(); const spikes = feed(d, 5000, 500, 0).concat(feed(d, 0, 100, 0), feed(d, -5, 100, 0), feed(d, NaN, 100, 0));   // 긴 정지·무효값은 무시
     const e = c.newQualityCtl(); const floor = feed(e, 40, 5000, 0);            // 아무리 느려도 마지막 단계에서 멈춘다
     const f = c.newQualityCtl(); f.level = 3; f.lastChange = 0; const up = feed(f, 16.7, 400, 20000);   // 20초 뒤 빠르면 올림
     const g = c.newQualityCtl(); g.level = 3; g.lastChange = 0; const tooSoon = feed(g, 16.7, 400, 5000); // 변경 5초 뒤엔 아직 안 올림
@@ -567,29 +567,114 @@ test('URL quality 인자: 숫자는 고정 단계(자동 끔), 이상한 값도 
   }, { query: '?paused=1&quality=auto' });
 });
 
-test('자동 품질: 실제로 느리면 스스로 품질을 낮추고, 고정 품질이면 그대로 둔다', async () => {
-  // 글자 4만 개 + 큰 화면 + DPR 2 로 일부러 무겁게 만든다
-  const heavy = { viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 2 };
-  await withPage(async (page, errors) => {
-    const before = await page.evaluate(() => XmasTree.app.state.qLevel);
-    await page.evaluate(() => { XmasTree.app.state.t = 16; XmasTree.app.setPaused(false); });
-    await page.waitForFunction(() => XmasTree.app.state.qLevel >= 1, null, { timeout: 25000 });
-    const after = await page.evaluate(() => ({ lv: XmasTree.app.state.qLevel, w: document.getElementById('c').width }));
-    assert.equal(before, 0); assert.ok(after.lv >= 1, `품질 ${after.lv}`);
-    assert.ok(after.w < 3200, `해상도도 내려가야 함(${after.w})`);
-    assert.deepEqual(errors, []);
-  }, { query: '?letters=40000&lights=400', ...heavy });
+test('자동 품질(통합): 느린 기기를 흉내 내면 스스로 품질을 낮춘다(80ms 넘게 느려도), 고정 품질이면 그대로 둔다', async () => {
+  // 기기 속도에 의존하지 않도록 프레임마다 인위적 지연(simCostMs)을 준다. 지연 40ms ≈ 20fps, 130ms ≈ 7fps(예전엔 적응 못 하던 구간)
+  for (const cost of [40, 130]) {
+    await withPage(async (page, errors) => {
+      const w0 = await page.evaluate(() => document.getElementById('c').width);
+      await page.evaluate((cost) => { const a = XmasTree.app; a.state.simCostMs = cost; a.state.t = 16; a.setPaused(false); a.start(); }, cost);
+      await page.waitForFunction(() => XmasTree.app.state.qLevel >= 1, null, { timeout: 40000 });
+      const r = await page.evaluate(() => ({ lv: XmasTree.app.state.qLevel, w: document.getElementById('c').width, hud: XmasTree.app.hudText(0, 0, 1, 0).lines[2] }));
+      assert.ok(r.lv >= 1, `지연 ${cost}ms: 품질 ${r.lv}`);
+      assert.ok(r.w < w0, `해상도도 내려가야 함(${w0} → ${r.w})`);
+      assert.ok(r.hud.endsWith('q' + r.lv), r.hud);
+      assert.deepEqual(errors, []);
+    }, { query: '?paused=1', deviceScaleFactor: 2 });
+  }
   await withPage(async (page) => {
-    await page.evaluate(() => { XmasTree.app.state.t = 16; XmasTree.app.setPaused(false); XmasTree.app.start(); });
-    await page.waitForTimeout(4000);
-    assert.deepEqual(await page.evaluate(() => [XmasTree.app.state.qLevel, XmasTree.app.state.qAuto]), [0, false]);
-  }, { query: '?quality=0&letters=40000&lights=400', ...heavy });
+    await page.evaluate(() => { const a = XmasTree.app; a.state.simCostMs = 60; a.state.t = 16; a.setPaused(false); a.start(); });
+    await page.waitForTimeout(3500);
+    assert.deepEqual(await page.evaluate(() => [XmasTree.app.state.qLevel, XmasTree.app.state.qAuto]), [0, false]);   // 고정 품질은 느려도 그대로
+  }, { query: '?paused=1&quality=0', deviceScaleFactor: 2 });
 });
+
+test('빠른 기기에서는 품질을 낮추지 않는다(불필요한 화질 저하 없음)', () => withPage(async (page) => {
+  await page.evaluate(() => { const a = XmasTree.app; a.state.t = 16; a.setPaused(false); a.start(); });
+  await page.waitForTimeout(3000);
+  assert.equal(await page.evaluate(() => XmasTree.app.state.qLevel), 0);
+}, { query: '?paused=1&letters=2000&lights=0', viewport: { width: 600, height: 500 } }));
 
 test('성능 기준선: 이전 구조(DPR1 약 42ms, DPR2 약 99ms)로 되돌아가지 않는다', async () => {
   for (const [dsf, limit] of [[1, 28], [2, 40]]) {
     const ms = await withPage((page) => page.evaluate(() => { const a = XmasTree.app; a.setQuality(0); for (let i = 0; i < 3; i++) a.draw(16 + i / 60); const t0 = performance.now(); for (let i = 0; i < 20; i++) a.draw(16 + i / 60); return (performance.now() - t0) / 20; }), { viewport: { width: 1400, height: 900 }, deviceScaleFactor: dsf });
     console.log(`  ↳ DPR ${dsf}: 프레임당 평균 ${ms.toFixed(1)}ms (1400x900, 8,500글자, 헤드리스 Chromium, 한계 ${limit}ms)`);
     assert.ok(ms < limit, `DPR ${dsf}: ${ms.toFixed(1)}ms ≥ ${limit}ms`);
+  }
+});
+
+test('qualityStep: 아주 느린 기기(80ms 넘는 프레임)에서도 적응한다 — 긴 정지만 무시하고, 한두 번 튀는 값에는 흔들리지 않는다', () => withPage(async (page) => {
+  const r = await core(page, (c) => {
+    const feed = (ctl, f, n) => { const ch = []; let now = 0; for (let i = 0; i < n; i++) { const ms = f(i); now += ms > 0 ? ms : 16.7; const v = c.qualityStep(ctl, ms, now); if (v !== null) ch.push(v); } return ch; };
+    return {
+      ms100: feed(c.newQualityCtl(), () => 100, 400),                       // 10fps 가 계속: 예전엔 80ms 넘는다고 전부 무시해 영원히 적응 못 했다
+      ms250: feed(c.newQualityCtl(), () => 250, 400),                       // 4fps
+      stall: feed(c.newQualityCtl(), () => 3000, 500),                      // 탭 전환 같은 긴 정지(1초 넘음)는 근거로 쓰지 않는다
+      isolated: feed(c.newQualityCtl(), (i) => (i % 50 === 25 ? 300 : 16.7), 4000),   // 가끔 한 프레임만 튀는 건 정상(GC 등)
+      mixed: feed(c.newQualityCtl(), (i) => (i % 3 === 0 ? 3000 : 16.7), 2000),
+    };
+  });
+  assert.ok(r.ms100.length >= 1 && r.ms100[0] >= 2, `10fps 에서 품질을 못 낮춤: ${JSON.stringify(r.ms100)}`);
+  assert.ok(r.ms250.length >= 1, `4fps 에서 품질을 못 낮춤: ${JSON.stringify(r.ms250)}`);
+  assert.deepEqual(r.stall, []);
+  assert.deepEqual(r.isolated, [], `가끔 튀는 프레임에 반응함: ${JSON.stringify(r.isolated)}`);
+  assert.deepEqual(r.mixed, []);
+}));
+
+const nonLetterCount = () => { const w = XmasTree.app.state.world, c = XmasTree.core, t = 14;
+  return w.trunk.length + w.orn.at.filter((a) => a <= c.visibleLetters(w, t)).length + c.garlandCount(w, t) + c.litLights(w, t); };
+
+test('컬링은 장식·전구·황금 줄을 절대 건너뛰지 않는다(글자가 거의 없는 장면에서 엄밀하게)', () => withPage(async (page) => {
+  // 글자는 97개뿐이라 글자끼리는 거의 안 겹친다. 반면 줄(700점)·전구(400)는 서로 촘촘히 겹쳐서, 컬링이 이들을 건드리면 개수가 바로 모자란다.
+  for (const cap of [1, 2, 3]) {
+    const r = { ...(await page.evaluate(TRACE, cap)), non: await page.evaluate(nonLetterCount) };
+    assert.ok(r.non > 1000, `비글자 ${r.non}`);
+    assert.ok(r.blits >= r.non, `겹침 허용 ${cap}: 비글자 ${r.non}개 중 ${r.non - Math.min(r.non, r.blits)}개 이상이 사라짐(그린 ${r.blits})`);
+    assert.ok(r.blits <= r.items);
+  }
+}, { query: '?paused=1&letters=97&lights=400' }));
+
+test('낮은 품질(3·4단계)에서는 번짐을 그리지 않고, 높은 단계에서는 그린다', () => withPage(async (page) => {
+  const five = {};
+  for (const lv of [0, 1, 2, 3, 4]) { await page.evaluate((lv) => { XmasTree.app.setQuality(lv); XmasTree.app.state.cullCap = undefined; }, lv); five[lv] = (await page.evaluate(TRACE)).five; }
+  for (const lv of [0, 1, 2]) assert.ok(five[lv] > 0, `${lv}단계는 번짐이 있어야 함(${five[lv]})`);
+  for (const lv of [3, 4]) assert.equal(five[lv], 0, `${lv}단계는 번짐을 끈다(${five[lv]})`);
+}));
+
+test('품질을 낮추면 그릴 글자가 keep 비율만큼 줄고, 장식은 그대로 남는다', () => withPage(async (page) => {
+  const non = await page.evaluate(nonLetterCount);
+  const items = {};
+  for (const lv of [0, 2, 3, 4]) { await page.evaluate((lv) => { XmasTree.app.setQuality(lv); XmasTree.app.state.cullCap = undefined; }, lv); items[lv] = (await page.evaluate(TRACE)).items; }
+  const keep = await core(page, (c) => c.LADDER.map((l) => l.keep));
+  const letters = 8500;
+  for (const lv of [0, 2, 3, 4]) {
+    const expected = non + letters * keep[lv];
+    assert.ok(Math.abs(items[lv] - expected) / expected < 0.04, `${lv}단계: 항목 ${items[lv]} (기대 ≈ ${Math.round(expected)})`);
+  }
+  assert.ok(items[0] > items[2] && items[2] > items[3] && items[3] > items[4]);
+}));
+
+test('글자 솎아내기는 같은 시드에서 항상 같은 글자가 빠진다(깜빡임 방지)', () => withPage(async (page) => {
+  const r = await core(page, (c) => {
+    const a = c.buildWorld({ seed: 11 }), b = c.buildWorld({ seed: 11 }); let same = true; for (let i = 0; i < a.count; i++) if (a.fhash[i] !== b.fhash[i]) same = false;
+    const below = (w, k) => { let n = 0; for (let i = 0; i < w.count; i++) if (w.fhash[i] < k) n++; return n / w.count; };
+    return { same, f75: below(a, 0.75), f40: below(a, 0.4) };
+  });
+  assert.ok(r.same, '같은 시드인데 솎아내기 값이 다름');
+  assert.ok(Math.abs(r.f75 - 0.75) < 0.02 && Math.abs(r.f40 - 0.4) < 0.02, `${r.f75}, ${r.f40}`);
+  // 같은 월드를 연속 두 번 그려도 같은 항목 집합(프레임마다 달라지지 않음)
+  await page.evaluate(() => XmasTree.app.setQuality(3));
+  const z = await page.evaluate(() => { XmasTree.app.draw(14); const a = XmasTree.app.drawOrderZ(); XmasTree.app.draw(14); const b = XmasTree.app.drawOrderZ(); return a.length === b.length && a.every((v, i) => v === b[i]); });
+  assert.ok(z, '같은 시각을 두 번 그렸는데 항목이 다름');
+}));
+
+test('아틀라스 크기 단계: 단계 간격이 크기 대비 충분히 작아 글자·장식 크기가 눈에 띄게 튀지 않는다', async () => {
+  // 실측(DPR·해상도별): 글자 6~8%, 장식 공 6%, 전구 13%(범위가 넓고 부드러운 빛이라 괜찮음). 단계가 2개뿐이면 약 48%.
+  for (const [dsf, vp] of [[1, { width: 1000, height: 800 }], [2, { width: 1400, height: 900 }], [1, { width: 390, height: 844 }]]) {
+    const r = await withPage((page) => page.evaluate(() => XmasTree.app.atlasInfo()), { deviceScaleFactor: dsf, viewport: vp });
+    for (const k of ['L', 'O', 'Li']) {
+      const rel = ((r[k].max - r[k].min) / (r[k].nc - 1)) / ((r[k].min + r[k].max) / 2);
+      assert.ok(rel <= 0.16, `DPR ${dsf} ${vp.width}x${vp.height} ${k}: 단계 간격이 크기의 ${(rel * 100).toFixed(0)}% (단계 ${r[k].nc}개)`);
+    }
+    assert.ok(r.L.nc >= 4, `DPR ${dsf} L: 단계 ${r.L.nc}개뿐`);
   }
 });
