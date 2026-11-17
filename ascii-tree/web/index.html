@@ -602,7 +602,7 @@
   app.configure({ text, letters, lights: Math.round(num('lights', 170, 0, 1000)), seed: Math.round(num('seed', 7, 0, 1e9)) });
   api.app = app;
   window.addEventListener('resize', () => app.resize());
-  if (params.has('paused')) { app.setPaused(true); app.draw(0); } else app.start();   // 정지로 열어도 첫 장면은 그린다
+  if (params.has('paused')) app.setPaused(true); else app.start();   // 정지로 열어도 첫 장면은 configure() 의 refresh() 가 이미 그렸다
 
   // ---- 컨트롤 ----
   const $ = (id) => document.getElementById(id);

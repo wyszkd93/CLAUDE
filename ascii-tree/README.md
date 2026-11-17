@@ -4,6 +4,9 @@
 
 ![미리보기](preview.png)
 
+> **브라우저에서 보려면** [`web/index.html`](web/index.html) 을 열면 됩니다(HTML 캔버스 버전, 파일 하나, 설치 불필요). 글자가 빛나고 별에서 광선이 퍼지는 더 부드러운 버전입니다. 자세한 건 [web/README.md](web/README.md).
+
+
 ## 실행
 
 ```bash
