@@ -1,0 +1,10 @@
+{
+  "name": "xmas-tree-canvas",
+  "private": true,
+  "type": "module",
+  "description": "회전하는 크리스마스 트리 (Canvas 2D, 단일 HTML 파일)",
+  "scripts": {
+    "check-syntax": "node scripts/check-syntax.mjs",
+    "test": "npm run -s check-syntax && node --test --test-timeout=60000 \"test/*.test.mjs\""
+  }
+}

@@ -1,0 +1,640 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Xmas Tree</title>
+<style>
+  :root {
+    --bg: #05070d;
+    --ink: #aab4c0;
+    --ink-dim: #6c7684;
+    --accent: #f1c453;
+    --panel: rgba(12, 16, 26, .82);
+    --line: rgba(255, 255, 255, .12);
+  }
+  html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; color: var(--ink);
+    font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  #ui { position: fixed; right: 12px; bottom: 12px; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+  #panel { display: none; width: min(300px, calc(100vw - 24px)); box-sizing: border-box; padding: 12px 14px; border: 1px solid var(--line);
+    border-radius: 10px; background: var(--panel); backdrop-filter: blur(6px); }
+  #ui.open #panel { display: block; }
+  #panel label { display: grid; grid-template-columns: 74px 1fr 52px; gap: 8px; align-items: center; margin: 6px 0; color: var(--ink-dim); }
+  #panel label.text { grid-template-columns: 74px 1fr; }
+  #panel output { text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; }
+  #panel input[type=text] { width: 100%; box-sizing: border-box; padding: 5px 8px; color: var(--ink); background: rgba(255,255,255,.06);
+    border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+  #panel input[type=range] { width: 100%; accent-color: var(--accent); }
+  .row { display: flex; gap: 8px; margin-top: 10px; }
+  button { font: inherit; color: var(--ink); background: rgba(255,255,255,.07); border: 1px solid var(--line); border-radius: 8px;
+    padding: 6px 12px; cursor: pointer; }
+  button:hover { background: rgba(255,255,255,.14); }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #panel .hint { margin: 8px 0 0; color: var(--ink-dim); font-size: 12px; }
+  #gear { width: 36px; height: 36px; padding: 0; font-size: 18px; line-height: 1; border-radius: 50%; opacity: .6; }
+  #gear:hover, #ui.open #gear { opacity: 1; }
+</style>
+</head>
+<body>
+<canvas id="c" aria-label="회전하는 크리스마스 트리 애니메이션" role="img"></canvas>
+<div id="ui">
+  <div id="panel" role="group" aria-label="설정">
+    <label class="text"><span>글자</span><input id="in-text" type="text" maxlength="40" value="MERRY CHRISTMAS" spellcheck="false"></label>
+    <label><span>글자 수</span><input id="in-letters" type="range" min="2000" max="20000" step="500" value="8500"><output id="out-letters"></output></label>
+    <label><span>전구</span><input id="in-lights" type="range" min="0" max="400" step="10" value="170"><output id="out-lights"></output></label>
+    <label><span>회전 속도</span><input id="in-spin" type="range" min="-60" max="90" step="1" value="15"><output id="out-spin"></output></label>
+    <div class="row"><button id="btn-replay" type="button">처음부터</button><button id="btn-pause" type="button">일시정지</button></div>
+    <p class="hint">Space 일시정지 · R 처음부터 · H HUD · F 전체화면</p>
+  </div>
+  <button id="gear" type="button" aria-label="설정 열기/닫기" aria-expanded="false">&#9881;</button>
+</div>
+
+<script>
+/* ---------------------------------------------------------------------------
+ * 회전하는 크리스마스 트리 (Canvas 2D, 외부 의존성 없음)
+ *
+ * 나무는 층(tier)마다 가지(branch)를 방사형으로 뻗고, 가지마다 글자 수천 개를 뿌려 만든다.
+ * 줄기에서 바깥으로 자라고, 다 자라면 황금 줄·장식 공·전구·별이 붙는다.
+ * 3D 회전 → 원근 투영 → 깊이 정렬(계수 정렬, O(n)) → 스프라이트 그리기.
+ * 글자는 미리 만든 스프라이트(글자 × 색조 × 밝기)를 drawImage 로 찍어 프레임당 비용을 낮춘다.
+ *
+ * window.XmasTree.core : 순수 계산 함수(테스트용).  window.XmasTree.app : 화면.
+ * ------------------------------------------------------------------------- */
+(function () {
+  'use strict';
+
+  const TAU = Math.PI * 2;
+  const CFG = Object.freeze({
+    tiers: 9, radius: 0.85, top: 1.0, bottom: -0.45, trunkBottom: -1.1,
+    droop: 0.42, camera: 4.5, grow: 10, initial: 453, golden: 0.618,
+    lightStart: 6, lightInterval: 0.04, bucketCount: 96, depthRange: 1.4,
+  });
+  const ORNAMENT_RGB = [[225, 45, 55], [240, 190, 60], [90, 140, 235], [225, 225, 235]];
+  const LIGHT_RGB = [[255, 235, 170], [255, 200, 90], [255, 90, 90], [120, 170, 255], [255, 255, 255]];
+  const LEVELS = 12;       // 글자 밝기 단계 수
+  const HUES = 3;          // 0 기본, 1 따뜻함(가지 끝), 2 차가움
+
+  // ---- 수학/난수 ------------------------------------------------------------
+  function mulberry32(seed) {
+    let a = seed | 0;
+    return function () {
+      a = (a + 0x6D2B79F5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  function makeRng(seed) {
+    const r = mulberry32(seed);
+    return {
+      next: r,
+      uniform: (a, b) => a + (b - a) * r(),
+      int: (n) => Math.floor(r() * n),
+      normal() { let u = 0; while (u === 0) u = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(TAU * r()); },
+    };
+  }
+  const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
+  function smoothstep(x) { x = clamp(x, 0, 1); return x * x * (3 - 2 * x); }
+
+  /** total 을 weights 비율로 나눠 합이 정확히 total, 각 몫은 1 이상이 되게 한다(최대 잔여법). */
+  function allocate(total, weights) {
+    const n = weights.length;
+    if (total < n) throw new RangeError('글자 수(' + total + ')가 가지 수(' + n + ')보다 적을 수 없음');
+    let sum = 0; for (const w of weights) sum += w;
+    const out = new Array(n), frac = new Array(n);
+    let used = 0;
+    for (let i = 0; i < n; i++) {
+      const share = weights[i] / sum * (total - n);
+      out[i] = Math.floor(share); frac[i] = share - out[i]; used += out[i];
+    }
+    let rest = total - n - used;
+    const idx = Array.from({ length: n }, (_, i) => i).sort((a, b) => (frac[b] - frac[a]) || (a - b));
+    for (let k = 0; rest > 0; k++, rest--) out[idx[k]] += 1;
+    return out.map((v) => v + 1);
+  }
+
+  /** 층의 (높이, 꼭대기로부터의 비율 0..1, 가지 수). 아래층일수록 가지가 많다. */
+  function tierLayout() {
+    const T = CFG.tiers, y0 = CFG.top - 0.12, y1 = CFG.bottom + 0.05;
+    const ys = [], frac = [], perTier = [];
+    for (let i = 0; i < T; i++) {
+      const y = y0 + (y1 - y0) * (i / (T - 1));
+      const f = (CFG.top - y) / (CFG.top - CFG.bottom);
+      ys.push(y); frac.push(f); perTier.push(Math.floor(6 + 10 * f));
+    }
+    return { ys, frac, perTier };
+  }
+  const MIN_LETTERS = tierLayout().perTier.reduce((a, b) => a + b, 0);
+
+  /** keys 를 0..B-1 칸으로 나눠 오름차순으로 정렬한 인덱스 배열(안정, O(n)). */
+  function countingOrder(keys, n, B) {
+    const counts = new Int32Array(B + 1);
+    for (let i = 0; i < n; i++) counts[keys[i] + 1]++;
+    for (let b = 0; b < B; b++) counts[b + 1] += counts[b];
+    const order = new Int32Array(n);
+    for (let i = 0; i < n; i++) order[counts[keys[i]]++] = i;
+    return order;
+  }
+
+  // ---- 월드 -----------------------------------------------------------------
+  function buildWorld(opts) {
+    const o = Object.assign({ letters: 8500, text: 'MERRY CHRISTMAS', lights: 170, ornaments: 26, seed: 7 }, opts || {});
+    const glyphs = Array.from(new Set(Array.from(o.text).filter((c) => c.trim()))).slice(0, 64);
+    const pool = Array.from(o.text).filter((c) => c.trim() && glyphs.includes(c));
+    if (!pool.length) throw new RangeError('text 에 글자가 하나는 있어야 함');
+    if (!(o.letters >= MIN_LETTERS)) throw new RangeError('letters 는 ' + MIN_LETTERS + ' 이상이어야 함');
+    const rng = makeRng(o.seed);
+    const { ys, frac, perTier } = tierLayout();
+    const R = CFG.radius;
+
+    const brTier = [], brAngle = [], brLen = [], brTint = [];
+    for (let ti = 0; ti < CFG.tiers; ti++) {
+      const tierLen = 0.12 + (R - 0.12) * frac[ti];
+      for (let b = 0; b < perTier[ti]; b++) {
+        brTier.push(ti);
+        brAngle.push(TAU * b / perTier[ti] + ti * CFG.golden * TAU + 0.12 * rng.normal());
+        brLen.push(tierLen * rng.uniform(0.85, 1.08));
+        brTint.push(rng.uniform(0.9, 1.0));
+      }
+    }
+    const counts = allocate(o.letters, brLen);
+    const N = o.letters;
+    const fx = new Float32Array(N), fy = new Float32Array(N), fz = new Float32Array(N);
+    const fs = new Float32Array(N), flight = new Float32Array(N), keys = new Float32Array(N);
+    const fglint = new Uint8Array(N), fchar = new Uint8Array(N), fhue = new Uint8Array(N), ftier = new Uint8Array(N);
+    let p = 0;
+    for (let b = 0; b < brLen.length; b++) {
+      const a = brAngle[b], L = brLen[b], ti = brTier[b];
+      for (let c = 0; c < counts[b]; c++, p++) {
+        const s = Math.pow(rng.next(), 0.65);                       // 가지 따라 위치(끝쪽에 몰림)
+        const rad = s * L;
+        const spread = (0.03 + 0.10 * s) * rng.normal();            // 가지 옆으로 퍼짐
+        const droop = CFG.droop * Math.pow(s, 1.7) * (L / R + 0.35); // 수평으로 뻗다가 끝에서 처짐
+        fx[p] = Math.cos(a) * rad - Math.sin(a) * spread;
+        fz[p] = Math.sin(a) * rad + Math.cos(a) * spread;
+        fy[p] = ys[ti] - droop + 0.025 * rng.normal();
+        fs[p] = s; ftier[p] = ti;
+        const tint = rng.uniform(0.75, 1.0) * brTint[b];
+        flight[p] = tint * (0.30 + 0.70 * Math.pow(s, 0.8));        // 안쪽은 어둡고 끝은 밝다
+        fglint[p] = rng.next() < 0.025 ? 1 : 0;                     // 군데군데 반짝이는 잎
+        fchar[p] = glyphs.indexOf(pool[rng.int(pool.length)]);
+        fhue[p] = s > 0.8 ? (rng.next() < 0.6 ? 1 : 0) : (rng.next() < 0.2 ? 2 : 0);
+        keys[p] = 0.75 * s + 0.25 * frac[ti] + 0.03 * rng.normal(); // 자라는 순서 키
+      }
+    }
+    // 자라는 순서: 줄기 가까운 곳·꼭대기부터 바깥·아래로
+    const sortedIdx = Array.from({ length: N }, (_, i) => i).sort((a, b) => (keys[a] - keys[b]) || (a - b));
+    const order = Uint32Array.from(sortedIdx);
+    const sortedKey = Float32Array.from(sortedIdx.map((i) => keys[i]));
+
+    const trunk = [];
+    for (let h = 0; h < 18; h++) {
+      const y = (CFG.bottom + 0.2) + (CFG.trunkBottom - (CFG.bottom + 0.2)) * (h / 17);
+      for (let r = 0; r < 10; r++) trunk.push([0.085 * Math.cos(TAU * r / 10 + h), y, 0.085 * Math.sin(TAU * r / 10 + h)]);
+    }
+
+    // 장식 공: 가지 끝, 그 가지가 자란 뒤에 나타난다
+    const pickB = Array.from({ length: brLen.length }, (_, i) => i);
+    for (let i = pickB.length - 1; i > 0; i--) { const j = rng.int(i + 1); [pickB[i], pickB[j]] = [pickB[j], pickB[i]]; }
+    const K = Math.min(Math.max(0, o.ornaments | 0), brLen.length);
+    const orn = { x: [], y: [], z: [], color: [], at: [] };
+    for (let i = 0; i < K; i++) {
+      const b = pickB[i], tipDroop = CFG.droop * (brLen[b] / R + 0.35);
+      orn.x.push(Math.cos(brAngle[b]) * brLen[b]); orn.z.push(Math.sin(brAngle[b]) * brLen[b]);
+      orn.y.push(ys[brTier[b]] - tipDroop + 0.02);
+      orn.color.push(rng.int(ORNAMENT_RGB.length));
+      orn.at.push(lowerBound(sortedKey, 0.75 + 0.25 * frac[brTier[b]]));
+    }
+
+    // 전구: 잎 위 점 몇 개를 골라 살짝 바깥에 둔다
+    const M = Math.min(Math.max(0, o.lights | 0), N);
+    const idx = new Uint32Array(N); for (let i = 0; i < N; i++) idx[i] = i;
+    const lights = { x: new Float32Array(M), y: new Float32Array(M), z: new Float32Array(M), phase: new Float32Array(M), color: new Uint8Array(M) };
+    for (let i = 0; i < M; i++) {
+      const j = i + rng.int(N - i); const t = idx[i]; idx[i] = idx[j]; idx[j] = t;
+      const q = idx[i];
+      lights.x[i] = fx[q] * 1.06; lights.y[i] = fy[q]; lights.z[i] = fz[q] * 1.06;
+      lights.phase[i] = rng.uniform(0, TAU); lights.color[i] = rng.int(LIGHT_RGB.length);
+    }
+
+    // 황금 전구 줄: 원뿔을 감는 나선(출렁임 포함)
+    const G = 700, garland = { u: new Float32Array(G), x: new Float32Array(G), y: new Float32Array(G), z: new Float32Array(G) };
+    for (let i = 0; i < G; i++) {
+      const u = 0.04 + 0.89 * (i / (G - 1));
+      const y = (CFG.top - 0.2) - u * ((CFG.top - 0.2) - (CFG.bottom + 0.12)) + 0.025 * Math.sin(u * TAU * 38);
+      const gf = (CFG.top - y) / (CFG.top - CFG.bottom);
+      const gr = (0.12 + (R - 0.12) * gf) * 0.95;
+      garland.u[i] = u; garland.x[i] = gr * Math.cos(u * TAU * 5); garland.y[i] = y; garland.z[i] = gr * Math.sin(u * TAU * 5);
+    }
+
+    return {
+      opts: o, glyphs, count: N, branchCount: brLen.length,
+      fx, fy, fz, fs, flight, fglint, fchar, fhue, ftier, order, sortedKey,
+      trunk, orn, ornCount: K, lights, lightCount: M, garland,
+    };
+  }
+
+  function lowerBound(arr, v) {   // arr 은 오름차순. v 보다 작은 원소 수.
+    let lo = 0, hi = arr.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (arr[mid] < v) lo = mid + 1; else hi = mid; }
+    return lo;
+  }
+
+  // ---- 시간에 따른 상태 -------------------------------------------------------
+  const angleDeg = (spin, t) => (((spin * t) % 360) + 360) % 360;
+  function visibleLetters(world, t) {
+    const n0 = Math.min(CFG.initial, world.count);
+    return Math.floor(n0 + (world.count - n0) * smoothstep(t / CFG.grow));
+  }
+  function litLights(world, t) {
+    if (t < CFG.lightStart || world.lightCount === 0) return 0;
+    return Math.min(world.lightCount, 1 + Math.floor((t - CFG.lightStart) / CFG.lightInterval));
+  }
+  /** t 초에 감겨 있는 황금 줄 점 수(앞에서부터 = 위에서부터). 나무가 거의 자란 뒤 감기기 시작한다. */
+  function garlandCount(world, t) {
+    const reach = smoothstep((t - 0.7 * CFG.grow) / (0.5 * CFG.grow));
+    if (reach <= 0) return 0;
+    const limit = 0.04 + 0.89 * reach;
+    let lo = 0, hi = world.garland.u.length;
+    // u 는 Float32 라 1e-9 허용 오차로는 마지막 점(0.93000001)이 영원히 빠진다
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (world.garland.u[mid] <= limit + 1e-6) lo = mid + 1; else hi = mid; }
+    return lo;
+  }
+
+  // ---- 투영 -----------------------------------------------------------------
+  function makeView(w, h) {
+    const treeH = CFG.top - CFG.trunkBottom;
+    const byH = 0.70 * h * CFG.camera / treeH;
+    const byW = 0.47 * w * (CFG.camera - CFG.radius * 1.2) / (CFG.radius * 1.25);
+    return { w, h, cx: w / 2, cy: h * 0.49, yc: (CFG.top + CFG.trunkBottom) / 2, focal: Math.min(byH, byW) };
+  }
+  /** 월드 점 → [화면 x, 화면 y, 깊이 z]. z 가 작을수록 카메라에 가깝다. */
+  function project(view, x, y, z, angle) {
+    const a = angle * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+    const rx = x * c + z * s, rz = -x * s + z * c;
+    const k = view.focal / (CFG.camera + rz);
+    return [view.cx + rx * k, view.cy - (y - view.yc) * k, rz];
+  }
+  /** 깊이에 따른 밝기(가까울수록 1, 먼 쪽은 0.35). */
+  const depthShade = (rz) => clamp(1 - 0.55 * (rz + CFG.radius) / (2 * CFG.radius), 0.35, 1);
+  /** 글자 한 개의 밝기 단계(0..LEVELS-1): 깊이 음영 × 가지 위치에 따른 밝기. */
+  const foliageLevel = (rz, light) => clamp(Math.floor(depthShade(rz) * light * LEVELS), 0, LEVELS - 1);
+  const depthBucket = (z) => clamp(Math.floor((z + CFG.depthRange) / (2 * CFG.depthRange) * CFG.bucketCount), 0, CFG.bucketCount - 1);
+
+  /** 눈송이 위치(화면 px). 아래로 떨어지며 좌우로 살랑이고, 끝까지 가면 위에서 다시 나온다. */
+  function snowAt(snow, i, t, w, h) {
+    const y = (((snow.y[i] * h + snow.speed[i] * t * h * 0.045) % h) + h) % h;
+    const x = (((snow.x[i] * w + 14 * Math.sin(t * 0.7 + snow.phase[i])) % w) + w) % w;
+    return [x, y];
+  }
+
+  const core = { CFG, MIN_LETTERS, mulberry32, makeRng, smoothstep, allocate, tierLayout, countingOrder, buildWorld, lowerBound,
+    angleDeg, visibleLetters, litLights, garlandCount, makeView, project, depthBucket, depthShade, foliageLevel, LEVELS, snowAt, ORNAMENT_RGB, LIGHT_RGB };
+
+  // ---- 화면 -----------------------------------------------------------------
+  function createApp(canvas) {
+    const ctx = canvas.getContext('2d', { alpha: false });
+    const state = { t: 0, paused: false, hud: true, spin: 15, fps: 60, dpr: 1, view: null, world: null, lastItems: 0 };
+    let sprites = null, bg = null, floorGlow = null, snow = null, twinkle = null;
+
+    const mk = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+
+    function makeSprites(world) {
+      const SZ = 40, list = [];
+      const rgb = (c) => 'rgb(' + c.map((v) => Math.round(clamp(v, 0, 255))).join(',') + ')';
+      const glyphSprite = (ch, color) => {
+        const c = mk(SZ, SZ), g = c.getContext('2d');
+        g.font = 'bold 30px ui-monospace, Menlo, Consolas, "Liberation Mono", monospace';
+        g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = rgb(color);
+        g.fillText(ch, SZ / 2, SZ / 2 + 1);
+        return c;
+      };
+      const radial = (stops, size) => {
+        const c = mk(size, size), g = c.getContext('2d'), r = size / 2;
+        const gr = g.createRadialGradient(r, r, 0, r, r, r);
+        for (const [o, col] of stops) gr.addColorStop(o, col);
+        g.fillStyle = gr; g.fillRect(0, 0, size, size);
+        return c;
+      };
+      const foliage = [];
+      for (let ci = 0; ci < world.glyphs.length; ci++)
+        for (let hue = 0; hue < HUES; hue++)
+          for (let lv = 0; lv < LEVELS; lv++) {
+            const sh = (lv + 0.5) / LEVELS;
+            const col = hue === 1 ? [14 + 85 * sh, 42 + 150 * sh, 26 + 28 * sh]
+              : hue === 2 ? [8 + 18 * sh, 40 + 130 * sh, 42 + 80 * sh]
+              : [14 + 34 * sh, 42 + 150 * sh, 26 + 34 * sh];
+            foliage.push(glyphSprite(world.glyphs[ci], col));
+          }
+      const glint = world.glyphs.map((ch) => glyphSprite(ch, [190, 232, 140]));
+      const trunk = glyphSprite('#', [125, 85, 48]);
+      const ornaments = ORNAMENT_RGB.map((c) => radial([[0, 'rgb(255,255,255)'], [0.18, rgb(c.map((v) => v * 1.1 + 40))], [0.7, rgb(c.map((v) => v * 0.8))], [0.92, rgb(c.map((v) => v * 0.35))], [1, 'rgba(0,0,0,0)']], 48));
+      const lightDot = LIGHT_RGB.map((c) => radial([[0, 'rgb(255,255,255)'], [0.3, rgb(c)], [1, 'rgba(0,0,0,0)']], 32));
+      const garlandDot = radial([[0, 'rgb(255,245,200)'], [0.35, 'rgb(245,190,70)'], [1, 'rgba(245,150,40,0)']], 28);
+      const halo = LIGHT_RGB.map((c) => radial([[0, 'rgba(' + c.join(',') + ',0.34)'], [1, 'rgba(' + c.join(',') + ',0)']], 64));
+      const garlandHalo = radial([[0, 'rgba(255,200,90,0.26)'], [1, 'rgba(255,170,50,0)']], 64);
+      return { foliage, glint, trunk, ornaments, lightDot, garlandDot, halo, garlandHalo };
+    }
+
+    function buildBackground(view, dpr) {
+      const { w, h } = view;
+      bg = mk(Math.ceil(w * dpr), Math.ceil(h * dpr));
+      const g = bg.getContext('2d'); g.scale(dpr, dpr);
+      const sky = g.createLinearGradient(0, 0, 0, h);
+      sky.addColorStop(0, '#04060b'); sky.addColorStop(0.65, '#07101c'); sky.addColorStop(1, '#0a1626');
+      g.fillStyle = sky; g.fillRect(0, 0, w, h);
+      const rng = makeRng((state.world ? state.world.opts.seed : 7) + 1);   // resize() 가 configure() 보다 먼저 불릴 수 있다
+      // 바닥: 줄기 아래 지면의 가로 줄(눈 쌓인 바닥의 반사)
+      const floorY = project(view, 0, CFG.trunkBottom, -0.55 * CFG.radius, 0)[1];
+      state.floorY = floorY;
+      for (let i = 0; i < 44; i++) {
+        const y = floorY + 2 + i * Math.max(1.5, h * 0.0045) + rng.next() * 2;
+        if (y > h) break;
+        const half = w * (0.12 + 0.34 * (i / 44) + 0.1 * rng.next());
+        const a = 0.16 * (1 - i / 44);
+        g.fillStyle = 'rgba(190,205,230,' + a.toFixed(3) + ')';
+        g.fillRect(view.cx - half, y, half * 2, 1);
+      }
+      floorGlow = mk(Math.ceil(w * dpr), Math.ceil(h * dpr));
+      const f = floorGlow.getContext('2d'); f.scale(dpr, dpr);
+      f.save(); f.translate(view.cx, floorY); f.scale(1, 0.22);
+      const rg = f.createRadialGradient(0, 0, 0, 0, 0, w * 0.34);
+      rg.addColorStop(0, 'rgba(255,205,110,0.55)'); rg.addColorStop(0.5, 'rgba(255,170,70,0.16)'); rg.addColorStop(1, 'rgba(255,150,50,0)');
+      f.fillStyle = rg; f.fillRect(-w, -w, w * 2, w * 2); f.restore();
+      // 별(반짝임)
+      const n = Math.round(w * h / 5500);
+      twinkle = { x: new Float32Array(n), y: new Float32Array(n), r: new Float32Array(n), phase: new Float32Array(n), rate: new Float32Array(n) };
+      for (let i = 0; i < n; i++) {
+        twinkle.x[i] = rng.next() * w; twinkle.y[i] = rng.next() * h * 0.9; twinkle.r[i] = 0.5 + rng.next() * 1.1;
+        twinkle.phase[i] = rng.next() * TAU; twinkle.rate[i] = 0.8 + rng.next() * 2.2;
+      }
+      const m = Math.max(40, Math.round(w * h / 9000));
+      snow = { x: new Float32Array(m), y: new Float32Array(m), speed: new Float32Array(m), phase: new Float32Array(m), r: new Float32Array(m) };
+      for (let i = 0; i < m; i++) {
+        snow.x[i] = rng.next(); snow.y[i] = rng.next(); snow.speed[i] = 0.6 + rng.next() * 1.6;
+        snow.phase[i] = rng.next() * TAU; snow.r[i] = 0.8 + rng.next() * 1.8;
+      }
+    }
+
+    // 프레임마다 쓰는 버퍼(월드가 바뀔 때만 다시 만든다)
+    let buf = null;
+    function allocBuffers(world) {
+      const cap = world.count + world.trunk.length + world.ornCount + world.garland.u.length + world.lightCount + 8;
+      buf = { cap, x: new Float32Array(cap), y: new Float32Array(cap), s: new Float32Array(cap), z: new Float32Array(cap), key: new Int32Array(cap),
+        sprite: new Int32Array(cap) };
+    }
+
+    function resize() {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const w = Math.max(240, window.innerWidth), h = Math.max(240, window.innerHeight);
+      canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
+      state.dpr = dpr; state.view = makeView(w, h);
+      buildBackground(state.view, dpr);
+      refresh();
+    }
+
+    function configure(opts) {
+      const o = Object.assign({}, state.world ? state.world.opts : {}, opts || {});
+      state.world = buildWorld(o);
+      sprites = makeSprites(state.world);
+      // 스프라이트 전체를 한 배열로 이어 붙여 정수 id 로 가리킨다
+      const w = state.world, all = [], base = {};
+      base.foliage = 0; for (const c of sprites.foliage) all.push(c);
+      base.glint = all.length; for (const c of sprites.glint) all.push(c);
+      base.trunk = all.length; all.push(sprites.trunk);
+      base.orn = all.length; for (const c of sprites.ornaments) all.push(c);
+      base.light = all.length; for (const c of sprites.lightDot) all.push(c);
+      base.garland = all.length; all.push(sprites.garlandDot);
+      sprites.all = all; sprites.base = base;
+      allocBuffers(w);
+      if (state.view) buildBackground(state.view, state.dpr);
+      state.t = 0;
+      refresh();
+    }
+
+    function draw(t) {
+      const world = state.world, view = state.view, dpr = state.dpr;
+      const { w, h, focal } = view;
+      const angle = angleDeg(state.spin, t);
+      const a = angle * Math.PI / 180, ca = Math.cos(a), sa = Math.sin(a);
+      const R = CFG.radius, B = CFG.bucketCount;
+      const base = sprites.base;
+
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+      ctx.drawImage(bg, 0, 0);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      // 별(반짝임)·눈
+      ctx.fillStyle = '#c8d2ee';
+      for (let i = 0; i < twinkle.x.length; i++) {
+        ctx.globalAlpha = 0.25 + 0.65 * (0.5 + 0.5 * Math.sin(t * twinkle.rate[i] + twinkle.phase[i]));
+        ctx.fillRect(twinkle.x[i], twinkle.y[i], twinkle.r[i], twinkle.r[i]);
+      }
+      // 바닥에 비치는 따뜻한 빛(전구가 켜질수록 밝아진다)
+      const warm = smoothstep((t - 0.55 * CFG.grow) / (0.45 * CFG.grow));
+      if (warm > 0) { ctx.globalAlpha = warm; ctx.globalCompositeOperation = 'lighter'; ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(floorGlow, 0, 0); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.globalCompositeOperation = 'source-over'; }
+
+      // ---- 나무 항목 모으기 ----
+      let n = 0;
+      const X = buf.x, Y = buf.y, S = buf.s, K = buf.key, SP = buf.sprite, Z = buf.z;
+      const toKey = (z) => B - 1 - depthBucket(z);   // 먼 것이 작은 키(먼저 그림)
+      const vis = visibleLetters(world, t);
+      const letterPx = 0.052;
+      for (let j = 0; j < vis; j++) {
+        const i = world.order[j];
+        const fx = world.fx[i], fz = world.fz[i];
+        const rz = -fx * sa + fz * ca, rx = fx * ca + fz * sa;
+        const k = focal / (CFG.camera + rz);
+        X[n] = view.cx + rx * k; Y[n] = view.cy - (world.fy[i] - view.yc) * k; S[n] = letterPx * k; K[n] = toKey(rz); Z[n] = rz;
+        if (world.fglint[i]) SP[n] = base.glint + world.fchar[i];
+        else {
+          const lv = foliageLevel(rz, world.flight[i]);
+          SP[n] = base.foliage + (world.fchar[i] * HUES + world.fhue[i]) * LEVELS + lv;
+        }
+        n++;
+      }
+      for (let i = 0; i < world.trunk.length; i++) {
+        const [tx, ty, tz] = world.trunk[i], rz = -tx * sa + tz * ca, rx = tx * ca + tz * sa, k = focal / (CFG.camera + rz);
+        X[n] = view.cx + rx * k; Y[n] = view.cy - (ty - view.yc) * k; S[n] = letterPx * k; K[n] = toKey(rz); Z[n] = rz; SP[n] = base.trunk; n++;
+      }
+      const orn = world.orn;
+      for (let i = 0; i < world.ornCount; i++) {
+        if (orn.at[i] > vis) continue;
+        const rz = -orn.x[i] * sa + orn.z[i] * ca, rx = orn.x[i] * ca + orn.z[i] * sa, k = focal / (CFG.camera + rz);
+        X[n] = view.cx + rx * k; Y[n] = view.cy - (orn.y[i] - view.yc) * k; S[n] = 0.1 * k; K[n] = toKey(rz - 0.08); Z[n] = rz - 0.08; SP[n] = base.orn + orn.color[i]; n++;
+      }
+      const gc = garlandCount(world, t), gl = world.garland;
+      const halos = [];   // 앞쪽 전구·줄만 은은하게 번지게(뒤쪽은 잎에 가려진다)
+      for (let i = 0; i < gc; i++) {
+        const rz = -gl.x[i] * sa + gl.z[i] * ca, rx = gl.x[i] * ca + gl.z[i] * sa, k = focal / (CFG.camera + rz);
+        const sx = view.cx + rx * k, sy = view.cy - (gl.y[i] - view.yc) * k;
+        X[n] = sx; Y[n] = sy; S[n] = 0.042 * k; K[n] = toKey(rz - 0.03); Z[n] = rz - 0.03; SP[n] = base.garland; n++;
+        if (rz < 0.1 && (i & 3) === 0) halos.push(sx, sy, 0.13 * k, -1);
+      }
+      const lit = litLights(world, t), L = world.lights;
+      for (let i = 0; i < lit; i++) {
+        const lx = L.x[i], lz = L.z[i], rz = -lx * sa + lz * ca, rx = lx * ca + lz * sa, k = focal / (CFG.camera + rz);
+        const tw = 0.6 + 0.4 * Math.sin(t * 3 + L.phase[i]);
+        const sx = view.cx + rx * k, sy = view.cy - (L.y[i] - view.yc) * k;
+        X[n] = sx; Y[n] = sy; S[n] = (0.045 + 0.03 * tw) * k; K[n] = toKey(rz - 0.05); Z[n] = rz - 0.05; SP[n] = base.light + L.color[i]; n++;
+        if (rz < 0.2) halos.push(sx, sy, (0.10 + 0.09 * tw) * k, L.color[i]);
+      }
+      state.lastItems = n;
+
+      // ---- 깊이 정렬(계수 정렬) 후 그리기 ----
+      const order = countingOrder(K, n, B);
+      state.lastOrder = order;
+      const all = sprites.all;
+      ctx.globalAlpha = 1;
+      for (let q = 0; q < n; q++) {
+        const i = order[q], s = S[i];
+        ctx.drawImage(all[SP[i]], X[i] - s / 2, Y[i] - s / 2, s, s);
+      }
+
+      // 번짐(가산 혼합)
+      ctx.globalCompositeOperation = 'lighter';
+      for (let q = 0; q < halos.length; q += 4) {
+        const s = halos[q + 2], c = halos[q + 3];
+        ctx.drawImage(c < 0 ? sprites.garlandHalo : sprites.halo[c], halos[q] - s / 2, halos[q + 1] - s / 2, s, s);
+      }
+      drawStar(t, angle);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = 1;
+
+      // 내리는 눈(나무 앞에도 조금)
+      ctx.fillStyle = '#e6ecf8';
+      for (let i = 0; i < snow.x.length; i++) {
+        const [sx, sy] = snowAt(snow, i, t, w, h);
+        ctx.globalAlpha = 0.35 + 0.5 * (snow.r[i] / 2.6);
+        ctx.beginPath(); ctx.arc(sx, sy, snow.r[i], 0, TAU); ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      if (state.hud) drawHud(t, angle, vis, lit);
+    }
+
+    function drawStar(t, angle) {
+      const appear = smoothstep((t - 0.9 * CFG.grow) / 1.0);
+      if (appear <= 0) return;
+      const view = state.view;
+      const [sx, sy] = project(view, 0, CFG.top + 0.03, 0, angle);
+      const k = view.focal / CFG.camera, pulse = (0.82 + 0.18 * Math.sin(t * 4)) * appear;
+      const gr = ctx.createRadialGradient(sx, sy, 0, sx, sy, 0.34 * k);
+      gr.addColorStop(0, 'rgba(255,236,170,' + (0.85 * pulse).toFixed(3) + ')');
+      gr.addColorStop(0.25, 'rgba(255,205,100,' + (0.35 * pulse).toFixed(3) + ')');
+      gr.addColorStop(1, 'rgba(255,170,60,0)');
+      ctx.fillStyle = gr; ctx.fillRect(sx - 0.4 * k, sy - 0.4 * k, 0.8 * k, 0.8 * k);
+      ctx.lineCap = 'round';
+      for (let i = 0; i < 4; i++) {          // 십자 광선 + 사선 광선
+        const ang = i * Math.PI / 4, len = (i % 2 === 0 ? 0.42 : 0.24) * k * (0.9 + 0.1 * Math.sin(t * 3 + i));
+        const dx = Math.cos(ang) * len, dy = Math.sin(ang) * len;
+        const lg = ctx.createLinearGradient(sx - dx, sy - dy, sx + dx, sy + dy);
+        lg.addColorStop(0, 'rgba(255,225,130,0)'); lg.addColorStop(0.5, 'rgba(255,240,180,' + (0.9 * pulse).toFixed(3) + ')'); lg.addColorStop(1, 'rgba(255,225,130,0)');
+        ctx.strokeStyle = lg; ctx.lineWidth = i % 2 === 0 ? 2 : 1.2;
+        ctx.beginPath(); ctx.moveTo(sx - dx, sy - dy); ctx.lineTo(sx + dx, sy + dy); ctx.stroke();
+      }
+      ctx.fillStyle = 'rgba(255,244,200,' + pulse.toFixed(3) + ')';
+      ctx.beginPath();
+      for (let i = 0; i < 10; i++) {          // 5각 별 몸통
+        const r = (i % 2 === 0 ? 0.075 : 0.032) * k, ang = -Math.PI / 2 + i * Math.PI / 5;
+        ctx[i === 0 ? 'moveTo' : 'lineTo'](sx + Math.cos(ang) * r, sy + Math.sin(ang) * r);
+      }
+      ctx.closePath(); ctx.fill();
+    }
+
+    const fmt = new Intl.NumberFormat('en-US');
+    function hudText(t, angle, letters, lit) {
+      const mm = String(Math.floor(t / 60)).padStart(2, '0'), ss = String(Math.floor(t % 60)).padStart(2, '0');
+      return { top: 't ' + mm + ':' + ss + 's', lines: [
+        'rotation ' + angle.toFixed(2).padStart(6, '0') + '°     lights ' + lit,
+        'letters ' + fmt.format(letters),
+        'running · ' + Math.round(state.fps) + ' fps',
+      ] };
+    }
+    function drawHud(t, angle, letters, lit) {
+      const { w, h } = state.view, hud = hudText(t, angle, letters, lit);
+      ctx.font = '13px ui-monospace, Menlo, Consolas, monospace'; ctx.textBaseline = 'alphabetic';
+      ctx.fillStyle = 'rgb(235,90,90)'; ctx.textAlign = 'right'; ctx.fillText(hud.top, w - 16, 26);
+      ctx.fillStyle = 'rgb(150,160,172)'; ctx.textAlign = 'left';
+      hud.lines.forEach((s, i) => ctx.fillText(s, 16, h - 16 - (hud.lines.length - 1 - i) * 18));
+    }
+
+    // ---- 루프 ----
+    let last = 0, raf = 0;
+    function frame(now) {
+      const dt = last ? Math.min(0.1, (now - last) / 1000) : 0;
+      last = now;
+      if (dt > 0) state.fps += (1 / dt - state.fps) * 0.05;
+      if (!state.paused) state.t += dt;
+      draw(state.t);
+      raf = requestAnimationFrame(frame);
+    }
+    function start() { if (!raf) { last = 0; raf = requestAnimationFrame(frame); } }
+    function stop() { cancelAnimationFrame(raf); raf = 0; }
+    /** 루프가 돌지 않을 때(정지·테스트) 크기·설정 변경을 화면에 반영한다. */
+    function refresh() { if (!raf && state.world && sprites && bg) draw(state.t); }
+
+    resize();
+    return {
+      state, configure, resize, start, stop, draw, refresh,
+      renderAt(t) { state.paused = true; state.t = t; draw(t); },
+      setPaused(p) { state.paused = !!p; },
+      replay() { state.t = 0; },
+      hudText,
+      /** 마지막 프레임에서 그린 순서대로의 깊이 z(테스트용). 먼 것부터 가까운 것 순이어야 한다. */
+      drawOrderZ() { return Array.from(state.lastOrder, (i) => buf.z[i]); },
+    };
+  }
+
+  // ---- 초기화 ----------------------------------------------------------------
+  const api = { core, app: null, createApp };
+  window.XmasTree = api;
+  const canvas = document.getElementById('c');
+  if (!canvas) return;
+  const params = new URLSearchParams(location.search);
+  const num = (k, d, lo, hi) => { const v = Number(params.get(k)); return params.has(k) && Number.isFinite(v) ? clamp(v, lo, hi) : d; };
+  const app = createApp(canvas);
+  app.state.spin = num('spin', 15, -360, 360);
+  let text = (params.get('text') || 'MERRY CHRISTMAS').slice(0, 40);
+  if (!text.trim()) text = 'MERRY CHRISTMAS';
+  const letters = Math.max(MIN_LETTERS, Math.round(num('letters', 8500, MIN_LETTERS, 40000)));
+  app.configure({ text, letters, lights: Math.round(num('lights', 170, 0, 1000)), seed: Math.round(num('seed', 7, 0, 1e9)) });
+  api.app = app;
+  window.addEventListener('resize', () => app.resize());
+  if (params.has('paused')) { app.setPaused(true); app.draw(0); } else app.start();   // 정지로 열어도 첫 장면은 그린다
+
+  // ---- 컨트롤 ----
+  const $ = (id) => document.getElementById(id);
+  const ui = $('ui'), gear = $('gear');
+  const sync = () => { $('out-letters').textContent = Number($('in-letters').value).toLocaleString('en-US'); $('out-lights').textContent = $('in-lights').value; $('out-spin').textContent = $('in-spin').value + '°/s'; };
+  $('in-text').value = text; $('in-letters').value = String(Math.min(20000, Math.max(2000, letters)));
+  $('in-lights').value = String(Math.min(400, app.state.world.lightCount)); $('in-spin').value = String(Math.round(app.state.spin));
+  sync();
+  let timer = 0;
+  const rebuild = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      const t = $('in-text').value.trim() ? $('in-text').value : 'MERRY CHRISTMAS';
+      app.configure({ text: t, letters: Math.max(MIN_LETTERS, Number($('in-letters').value)), lights: Number($('in-lights').value) });
+    }, 150);
+  };
+  for (const id of ['in-text', 'in-letters', 'in-lights']) $(id).addEventListener('input', () => { sync(); rebuild(); });
+  $('in-spin').addEventListener('input', () => { app.state.spin = Number($('in-spin').value); sync(); });
+  const showPause = () => { $('btn-pause').textContent = app.state.paused ? '재생' : '일시정지'; };
+  const togglePause = () => { app.setPaused(!app.state.paused); if (!app.state.paused) app.start(); showPause(); };
+  showPause();
+  $('btn-pause').addEventListener('click', togglePause);
+  $('btn-replay').addEventListener('click', () => app.replay());
+  gear.addEventListener('click', () => { const open = ui.classList.toggle('open'); gear.setAttribute('aria-expanded', String(open)); });
+  window.addEventListener('keydown', (e) => {
+    if (e.target && e.target.tagName === 'INPUT' && e.target.type === 'text') return;
+    if (e.code === 'Space') { e.preventDefault(); togglePause(); }
+    else if (e.key === 'r' || e.key === 'R') app.replay();
+    else if (e.key === 'h' || e.key === 'H') app.state.hud = !app.state.hud;
+    else if (e.key === 'f' || e.key === 'F') { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen && document.documentElement.requestFullscreen(); }
+  });
+})();
+</script>
+</body>
+</html>
