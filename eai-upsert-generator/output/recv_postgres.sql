@@ -1,4 +1,4 @@
-INSERT INTO public.eai_recv_sample (
+INSERT INTO public.eai_sample (
      cmp_cd
     ,site_cd
     ,recv_dt
