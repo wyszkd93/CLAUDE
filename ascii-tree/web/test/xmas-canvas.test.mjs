@@ -241,7 +241,7 @@ const PIXELS = () => {
   const cv = document.getElementById('c'), g = cv.getContext('2d'), { width: W, height: H } = cv;
   const d = g.getImageData(0, 0, W, H).data, cx = W / 2, out = { green: 0, gold: 0, red: 0, star: 0, hash: 0 };
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-    const i = (y * W + x) * 4, r = d[i], gg = d[i + 1], b = d[i + 2];
+    const i = (y * W + x) * 4, al = d[i + 3] / 255, r = d[i] * al, gg = d[i + 1] * al, b = d[i + 2] * al;   // 메인 캔버스는 투명하다: 어두운 배경 위에 합성된 색으로 잰다
     if (gg > r * 1.5 && gg > b * 1.25 && gg > 70) out.green++;
     if (r > 200 && gg > 140 && b < 130 && r > b * 1.8) out.gold++;
     if (r > 190 && gg < 90 && b < 90) out.red++;
@@ -367,3 +367,229 @@ test('정지로 열어도 첫 장면이 그려져 있고, 크기·설정을 바�
   assert.notEqual(before.hash, after.hash);
   assert.ok(await nonBlank() > 100, '크기를 바꾼 뒤 캔버스가 비어 있음');
 }));
+
+// ===================== 성능 구조(느려지지 않게 지키는 성질) =====================
+test('frameGate: 60Hz 는 매 틱, 144/240Hz 는 평균 60fps 로 상한, 30Hz 는 매 틱, 오래 멈췄다 와도 바로 그린다', () => withPage(async (page) => {
+  const r = await core(page, (c) => {
+    const sim = (hz, ms) => { let due = 0, n = 0; const dt = 1000 / hz; for (let now = 0; now < ms; now += dt) { const g = c.frameGate(now, due); due = g.due; if (g.render) n++; } return n; };
+    let due = c.frameGate(0, 0).due; const afterStall = c.frameGate(10000, due);   // 10초 멈췄다가
+    const early = c.frameGate(5, 16.7), onTime = c.frameGate(14, 16.7), late = c.frameGate(30, 16.7);
+    return { hz60: sim(60, 10000), hz144: sim(144, 10000), hz240: sim(240, 10000), hz30: sim(30, 10000), hz75: sim(75, 10000),
+      stall: afterStall.render, stallDue: afterStall.due - 10000, early: early.render, onTime: onTime.render, late: late.render };
+  });
+  assert.ok(Math.abs(r.hz60 - 600) <= 2, `60Hz: ${r.hz60}`);
+  assert.ok(Math.abs(r.hz144 - 600) <= 12, `144Hz 에서 10초에 ${r.hz144}번(≈600 이어야 함)`);
+  assert.ok(Math.abs(r.hz240 - 600) <= 12, `240Hz: ${r.hz240}`);
+  assert.ok(Math.abs(r.hz30 - 300) <= 2, `30Hz 는 매 틱 그려야 함: ${r.hz30}`);
+  assert.ok(r.hz75 < 640, `75Hz: ${r.hz75}`);
+  assert.ok(r.stall && r.stallDue > 0 && r.stallDue < 20);
+  assert.equal(r.early, false); assert.equal(r.onTime, true); assert.equal(r.late, true);
+}));
+
+test('qualityStep: 계속 느리면 한 단계씩 낮추고, 충분히 오래 빠르면 올리고, 이상한 간격은 무시한다', () => withPage(async (page) => {
+  const r = await core(page, (c) => {
+    const feed = (ctl, ms, n, t0) => { let ch = []; for (let i = 0; i < n; i++) { const v = c.qualityStep(ctl, ms, t0 + i * ms); if (v !== null) ch.push(v); } return ch; };
+    const a = c.newQualityCtl(); const slow = feed(a, 30, 200, 0);              // 33fps 가 계속
+    const b = c.newQualityCtl(); const ok = feed(b, 16.7, 2000, 0);             // 60fps 가 계속 → 변화 없음
+    const d = c.newQualityCtl(); const spikes = feed(d, 200, 500, 0).concat(feed(d, 0, 100, 0), feed(d, -5, 100, 0), feed(d, NaN, 100, 0));
+    const e = c.newQualityCtl(); const floor = feed(e, 40, 5000, 0);            // 아무리 느려도 마지막 단계에서 멈춘다
+    const f = c.newQualityCtl(); f.level = 3; f.lastChange = 0; const up = feed(f, 16.7, 400, 20000);   // 20초 뒤 빠르면 올림
+    const g = c.newQualityCtl(); g.level = 3; g.lastChange = 0; const tooSoon = feed(g, 16.7, 400, 5000); // 변경 5초 뒤엔 아직 안 올림
+    const h = c.newQualityCtl(); h.level = 3; h.ups = 2; h.lastChange = 0; const capped = feed(h, 16.7, 400, 99000);
+    const borderline = c.newQualityCtl(); const mid = feed(borderline, 20, 3000, 0);   // 50fps: 느림도 빠름도 아님
+    const vs = c.newQualityCtl(); const verySlow = feed(vs, 60, 400, 0);           // 16fps 가 계속 → 두 단계씩
+    return { slow, verySlow, ok, spikes, floor, floorMax: c.LADDER.length - 1, up, tooSoon, capped, mid };
+  });
+  assert.deepEqual(r.slow.slice(0, 2), [1, 2]);          // 40프레임(+재구성 후 12프레임 대기)마다 한 단계씩
+  assert.deepEqual(r.verySlow.slice(0, 2), [2, 4]);      // 25fps 미만이면 20프레임 뒤 두 단계씩
+  assert.deepEqual(r.ok, []);
+  assert.deepEqual(r.spikes, []);
+  assert.equal(r.floor.at(-1), r.floorMax); assert.deepEqual(r.floor, [1, 2, 3, 4]);   // 40ms(25fps) 는 아주 느림의 경계: 한 단계씩
+  assert.deepEqual(r.up, [2]); assert.deepEqual(r.tooSoon, []); assert.deepEqual(r.capped, []);
+  assert.deepEqual(r.mid, []);
+}));
+
+test('품질 단계표: 내려갈수록 해상도·그리는 글자는 줄고 컬링은 세진다', () => withPage(async (page) => {
+  const L = await core(page, (c) => c.LADDER.map((x) => ({ ...x })));
+  assert.ok(L.length >= 4);
+  assert.deepEqual(L[0], { scale: 2, keep: 1, halo: true, cap: 3 });
+  for (let i = 1; i < L.length; i++) {
+    assert.ok(L[i].scale <= L[i - 1].scale && L[i].keep <= L[i - 1].keep && L[i].cap >= 1 && L[i].cap <= L[i - 1].cap, `${i}단계가 ${i - 1}단계보다 가벼워야 함`);
+    if (!L[i - 1].halo) assert.equal(L[i].halo, false);
+  }
+}));
+
+test('packShelves: 칸이 서로 겹치지 않고 모두 아틀라스 안에 들어간다', () => withPage(async (page) => {
+  const r = await core(page, (c) => {
+    const rng = c.makeRng(4), sizes = Array.from({ length: 800 }, () => 6 + rng.int(36)); const pk = c.packShelves(sizes, 512, 1);
+    let overlap = 0, outside = 0;
+    for (let i = 0; i < sizes.length; i++) {
+      if (pk.x[i] < 0 || pk.y[i] < 0 || pk.x[i] + sizes[i] > 512 || pk.y[i] + sizes[i] > pk.height) outside++;
+      for (let j = i + 1; j < sizes.length; j++) if (pk.x[i] < pk.x[j] + sizes[j] && pk.x[j] < pk.x[i] + sizes[i] && pk.y[i] < pk.y[j] + sizes[j] && pk.y[j] < pk.y[i] + sizes[i]) overlap++;
+    }
+    let thr = false; try { c.packShelves([600], 512, 1); } catch (e) { thr = e instanceof RangeError; }
+    return { overlap, outside, height: pk.height, area: sizes.reduce((a, s) => a + s * s, 0), thr, pad: (() => { const q = c.packShelves([10, 10], 100, 3); return q.x[1] - q.x[0]; })() };
+  });
+  assert.equal(r.overlap, 0); assert.equal(r.outside, 0); assert.ok(r.thr);
+  assert.equal(r.pad, 13);                                    // 한 변 10 + 여백 3
+  assert.ok(r.height * 512 < r.area * 2.2, `배치가 너무 낭비됨: 높이 ${r.height}`);
+}));
+
+test('classIndex·stableHash·countingOrderInto', () => withPage(async (page) => {
+  const r = await core(page, (c) => {
+    const cls = [c.classIndex(0, 10, 2, 5), c.classIndex(10, 10, 2, 5), c.classIndex(13.2, 10, 2, 5), c.classIndex(18, 10, 2, 5), c.classIndex(99, 10, 2, 5)];
+    const h = Array.from({ length: 5000 }, (_, i) => c.stableHash(i)); const below = h.filter((x) => x < 0.5).length; let adj = 0;
+    for (let i = 1; i < h.length; i++) if (Math.abs(h[i] - h[i - 1]) < 0.02) adj++;
+    const rng = c.makeRng(9), B = 96, n = 3000, order = new Int32Array(n + 50), counts = new Int32Array(B + 1); let same = true;
+    for (let round = 0; round < 3; round++) {                 // 같은 버퍼를 재사용해도 이전 호출 흔적이 남지 않아야 한다
+      const keys = new Int32Array(n).map(() => rng.int(B)); const ref = c.countingOrder(keys, n, B); c.countingOrderInto(keys, n, B, order, counts);
+      for (let i = 0; i < n; i++) if (order[i] !== ref[i]) same = false;
+    }
+    return { cls, below, inRange: h.every((x) => x >= 0 && x < 1), det: c.stableHash(7) === c.stableHash(7), adj, same };
+  });
+  assert.deepEqual(r.cls, [0, 0, 2, 4, 4]);
+  assert.ok(r.inRange && r.det);
+  assert.ok(r.below > 2350 && r.below < 2650, `분포가 치우침: ${r.below}`);
+  assert.ok(r.adj < 400, `이웃 값이 너무 비슷함: ${r.adj}`);
+  assert.ok(r.same);
+}));
+
+/** draw() 한 번 동안의 drawImage 호출을 가로채 분류한다. */
+const TRACE = (cap) => {
+  const app = XmasTree.app, proto = CanvasRenderingContext2D.prototype, orig = proto.drawImage, calls = [];
+  proto.drawImage = function (...a) { calls.push(a); return orig.apply(this, a); };
+  try { if (cap !== undefined) app.state.cullCap = cap; app.state.hud = false; app.draw(14); } finally { proto.drawImage = orig; }
+  const unscaled = calls.filter((a) => a.length === 9 && a[3] === a[7] && a[4] === a[8] && Number.isInteger(a[5]) && Number.isInteger(a[6]));
+  return { total: calls.length, unscaled: unscaled.length, nine: calls.filter((a) => a.length === 9).length, sources: new Set(unscaled.map((a) => a[0])).size,
+    blits: app.state.blits, items: app.state.lastItems, five: calls.filter((a) => a.length === 5).length };
+};
+
+test('핵심 성질: 모든 글자·장식 스프라이트를 단일 아틀라스에서 확대·축소 없이 정수 좌표로 찍는다', () => withPage(async (page) => {
+  const r = await page.evaluate(TRACE);
+  assert.equal(r.sources, 1, `원본 이미지가 ${r.sources}개 — 하나(아틀라스)여야 그리기 호출이 묶인다`);
+  assert.equal(r.unscaled, r.blits, '아틀라스 호출은 전부 크기 변환 없이(sw==dw, sh==dh), 정수 좌표(dx, dy)여야 한다');
+  assert.equal(r.nine, r.unscaled);
+  assert.ok(r.blits > 3000, `찍은 항목 ${r.blits}`);
+  assert.ok(r.five > 0 && r.five < 400, `번짐은 확대 그리기(5인자) ${r.five}번`);
+}));
+
+test('가려진 글자 컬링: 겹침 허용이 작을수록 덜 그리고, 장식·전구·줄은 절대 건너뛰지 않는다', () => withPage(async (page) => {
+  const off = await page.evaluate(TRACE, 0), c255 = await page.evaluate(TRACE, 255), c3 = await page.evaluate(TRACE, 3), c2 = await page.evaluate(TRACE, 2), c1 = await page.evaluate(TRACE, 1);
+  assert.equal(off.blits, off.items); assert.equal(c255.blits, c255.items);          // 켜지 않았거나 허용이 크면 하나도 안 건너뛴다
+  assert.ok(c3.blits < off.items * 0.8, `기본(3)에서 ${c3.blits}/${off.items}`);
+  assert.ok(c1.blits < c2.blits && c2.blits < c3.blits && c3.blits < off.blits);
+  const nonLetters = await page.evaluate(() => { const w = XmasTree.app.state.world, c = XmasTree.core, t = 14;
+    return w.trunk.length + w.orn.at.filter((a) => a <= c.visibleLetters(w, t)).length + c.garlandCount(w, t) + c.litLights(w, t); });
+  assert.ok(c1.blits >= nonLetters, `가장 센 컬링(1)에서도 비글자 ${nonLetters}개는 다 그려야 함(${c1.blits})`);
+  // 장식이 실제로 보이는지: 컬링 중에도 빨강·황금 픽셀이 남는다
+  await page.evaluate(() => { XmasTree.app.state.cullCap = 1; XmasTree.app.state.hud = false; XmasTree.app.renderAt(14); });
+  const px = await page.evaluate(PIXELS); assert.ok(px.red > 100 && px.gold > 300, `컬링 1 에서 장식이 사라짐: red ${px.red} gold ${px.gold}`);
+}));
+
+test('컬링이 모습을 크게 바꾸지 않는다: 기본(3)과 끔(0)의 초록 픽셀·덮인 면적 차이가 작다', () => withPage(async (page) => {
+  const m = {};
+  for (const cap of [0, 3, 1]) {
+    m[cap] = await page.evaluate((cap) => { XmasTree.app.state.cullCap = cap; XmasTree.app.state.hud = false; XmasTree.app.renderAt(14);
+      const c = document.getElementById('c'), d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let cover = 0; for (let i = 3; i < d.length; i += 4) if (d[i] > 40) cover++;
+      return { green: 0, cover }; }, cap);
+    m[cap].green = (await page.evaluate(PIXELS)).green;
+  }
+  // 측정값: 허용 3 은 초록 -8.9%, 덮인 면적 -1.1%. 허용 1 은 -42%, -9.2%(낮은 품질 단계 전용)
+  assert.ok(Math.abs(m[3].green - m[0].green) / m[0].green < 0.12, `초록 ${m[3].green} vs ${m[0].green}`);
+  assert.ok(Math.abs(m[3].cover - m[0].cover) / m[0].cover < 0.03, `덮인 면적 ${m[3].cover} vs ${m[0].cover}`);
+  assert.ok(m[1].green < m[3].green * 0.85, '허용 1 은 눈에 띄게 더 성겨야 함(낮은 품질용)');
+}));
+
+test('정적 레이어: 배경은 별도 캔버스, 메인 캔버스는 투명(매 프레임 전체 화면을 칠하지 않는다), 바닥 빛은 CSS 투명도', () => withPage(async (page) => {
+  const r = await page.evaluate(() => {
+    const a = XmasTree.app; a.state.hud = false; a.renderAt(0);
+    const bg = document.getElementById('bg'), c = document.getElementById('c'), cg = c.getContext('2d').getImageData(0, 0, c.width, c.height).data, bgd = bg.getContext('2d').getImageData(0, bg.height - 2, 1, 1).data;
+    let clear = 0; for (let i = 3; i < cg.length; i += 4) if (cg[i] === 0) clear++;
+    const glow = document.getElementById('glow'), o0 = glow.style.opacity; a.renderAt(14);
+    return { sameSize: bg.width === c.width && bg.height === c.height, clearFrac: clear / (cg.length / 4), bgPixel: Array.from(bgd), o0: Number(o0), o14: Number(glow.style.opacity),
+      glowBox: [glow.style.left, glow.style.top, glow.style.width, glow.style.height], order: [bg, glow, c].map((e) => e.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING ? 1 : 0), floorY: a.state.floorY, h: a.state.view.h };
+  });
+  assert.ok(r.sameSize);
+  assert.ok(r.clearFrac > 0.8, `메인 캔버스의 투명 픽셀 비율 ${r.clearFrac}`);
+  assert.ok(r.bgPixel[0] + r.bgPixel[1] + r.bgPixel[2] > 10 && r.bgPixel[3] === 255, `배경 캔버스에 하늘이 그려져 있어야 함: ${r.bgPixel}`);
+  assert.equal(r.o0, 0); assert.ok(r.o14 > 0.99, `다 자란 뒤 바닥 빛 투명도 ${r.o14}`);
+  assert.ok(r.glowBox.every((v) => /px$/.test(v)), `바닥 빛 위치·크기: ${r.glowBox}`);
+  assert.deepEqual(r.order, [1, 1, 0]);
+  assert.ok(r.floorY > 0 && r.floorY < r.h);
+}));
+
+test('아틀라스: 크기 단계가 유효하고 4096 안에 들어가며 만드는 데 오래 걸리지 않는다', () => withPage(async (page) => {
+  const r = await page.evaluate(() => XmasTree.app.atlasInfo());
+  assert.ok(r.height > 0 && r.height <= 4096, `높이 ${r.height}`);
+  for (const k of ['L', 'O', 'Li', 'Ga']) assert.ok(r[k].min >= 4 && r[k].max > r[k].min && r[k].nc >= 2 && r[k].nc <= 8, `${k} ${JSON.stringify(r[k])}`);
+  assert.ok(r.ms < 600, `아틀라스 생성 ${r.ms.toFixed(0)}ms`);
+}, { deviceScaleFactor: 2 }));
+
+test('아틀라스 크기는 DPR 에 따라 커진다(고해상도 화면에서 흐려지지 않는다)', async () => {
+  const sizes = [];
+  for (const dsf of [1, 2]) sizes.push(await withPage((page) => page.evaluate(() => XmasTree.app.atlasInfo().L.min), { deviceScaleFactor: dsf }));
+  assert.ok(sizes[1] >= sizes[0] * 1.8, `DPR 1: ${sizes[0]}px, DPR 2: ${sizes[1]}px`);
+});
+
+test('창 크기 이벤트가 연달아 와도 아틀라스는 한 번만 다시 만든다(디바운스)', () => withPage(async (page) => {
+  const before = await page.evaluate(() => XmasTree.app.state.atlasBuilds);
+  await page.evaluate(() => { for (let i = 0; i < 25; i++) window.dispatchEvent(new Event('resize')); });
+  await page.waitForTimeout(400);
+  const after = await page.evaluate(() => XmasTree.app.state.atlasBuilds);
+  assert.equal(after - before, 1, `재생성 ${after - before}번`);
+}));
+
+test('품질 선택: 단계별 해상도 배율·HUD 표시·UI 와 URL 인자 연동', () => withPage(async (page) => {
+  const w = () => page.evaluate(() => document.getElementById('c').width);
+  assert.equal(await w(), 2000);                                                      // DPR 2, 최고 품질
+  assert.equal(await page.evaluate(() => XmasTree.app.hudText(0, 0, 453, 0).lines[2].includes(' q')), false);
+  await page.click('#gear'); await page.selectOption('#in-quality', '4');
+  assert.deepEqual(await page.evaluate(() => [XmasTree.app.state.qLevel, XmasTree.app.state.qAuto]), [4, false]);
+  assert.equal(await w(), 750);                                                       // 4단계: 배율 0.75
+  assert.ok(await page.evaluate(() => XmasTree.app.hudText(0, 0, 453, 0).lines[2].endsWith('\u00b7 q4')));
+  assert.equal(await page.evaluate(() => document.getElementById('bg').width), 750);   // 정적 배경도 같이 다시 만든다
+  await page.selectOption('#in-quality', '0'); assert.equal(await w(), 2000);
+  await page.selectOption('#in-quality', '2'); assert.equal(await w(), 1000);          // 2단계: 배율 1
+  await page.selectOption('#in-quality', 'auto'); assert.equal(await page.evaluate(() => XmasTree.app.state.qAuto), true);
+}, { deviceScaleFactor: 2 }));
+
+test('URL quality 인자: 숫자는 고정 단계(자동 끔), 이상한 값도 안전하게', async () => {
+  await withPage(async (page, errors) => {
+    assert.deepEqual(await page.evaluate(() => [XmasTree.app.state.qLevel, XmasTree.app.state.qAuto, document.getElementById('in-quality').value]), [3, false, '3']);
+    assert.deepEqual(errors, []);
+  }, { query: '?paused=1&quality=3' });
+  await withPage(async (page, errors) => {
+    const s = await page.evaluate(() => [XmasTree.app.state.qLevel, XmasTree.app.state.qAuto]);
+    assert.ok(s[0] >= 0 && s[0] <= 4); assert.deepEqual(errors, []);
+  }, { query: '?paused=1&quality=zzz' });
+  await withPage(async (page) => {
+    assert.deepEqual(await page.evaluate(() => [XmasTree.app.state.qLevel, XmasTree.app.state.qAuto]), [0, true]);
+  }, { query: '?paused=1&quality=auto' });
+});
+
+test('자동 품질: 실제로 느리면 스스로 품질을 낮추고, 고정 품질이면 그대로 둔다', async () => {
+  // 글자 4만 개 + 큰 화면 + DPR 2 로 일부러 무겁게 만든다
+  const heavy = { viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 2 };
+  await withPage(async (page, errors) => {
+    const before = await page.evaluate(() => XmasTree.app.state.qLevel);
+    await page.evaluate(() => { XmasTree.app.state.t = 16; XmasTree.app.setPaused(false); });
+    await page.waitForFunction(() => XmasTree.app.state.qLevel >= 1, null, { timeout: 25000 });
+    const after = await page.evaluate(() => ({ lv: XmasTree.app.state.qLevel, w: document.getElementById('c').width }));
+    assert.equal(before, 0); assert.ok(after.lv >= 1, `품질 ${after.lv}`);
+    assert.ok(after.w < 3200, `해상도도 내려가야 함(${after.w})`);
+    assert.deepEqual(errors, []);
+  }, { query: '?letters=40000&lights=400', ...heavy });
+  await withPage(async (page) => {
+    await page.evaluate(() => { XmasTree.app.state.t = 16; XmasTree.app.setPaused(false); XmasTree.app.start(); });
+    await page.waitForTimeout(4000);
+    assert.deepEqual(await page.evaluate(() => [XmasTree.app.state.qLevel, XmasTree.app.state.qAuto]), [0, false]);
+  }, { query: '?quality=0&letters=40000&lights=400', ...heavy });
+});
+
+test('성능 기준선: 이전 구조(DPR1 약 42ms, DPR2 약 99ms)로 되돌아가지 않는다', async () => {
+  for (const [dsf, limit] of [[1, 28], [2, 40]]) {
+    const ms = await withPage((page) => page.evaluate(() => { const a = XmasTree.app; a.setQuality(0); for (let i = 0; i < 3; i++) a.draw(16 + i / 60); const t0 = performance.now(); for (let i = 0; i < 20; i++) a.draw(16 + i / 60); return (performance.now() - t0) / 20; }), { viewport: { width: 1400, height: 900 }, deviceScaleFactor: dsf });
+    console.log(`  ↳ DPR ${dsf}: 프레임당 평균 ${ms.toFixed(1)}ms (1400x900, 8,500글자, 헤드리스 Chromium, 한계 ${limit}ms)`);
+    assert.ok(ms < limit, `DPR ${dsf}: ${ms.toFixed(1)}ms ≥ ${limit}ms`);
+  }
+});
